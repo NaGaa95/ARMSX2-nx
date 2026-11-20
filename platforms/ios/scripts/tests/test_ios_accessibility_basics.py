@@ -2,11 +2,12 @@
 
 import unittest
 
-from ios_source import SWIFT, block, read, without_comments
+from ios_source import block, read, swift, without_comments
 
 
-LIBRARY = SWIFT / "Views/GameListView.swift"
-OVERLAYS = SWIFT / "Views/ControllerGameContextMenu.swift"
+LIBRARY = swift("GameListView.swift")
+OVERLAYS = swift("ControllerGameContextMenu.swift")
+ALERT = swift("ControllerNavigationAlert.swift")
 
 
 class CardTextFollowsLargerText(unittest.TestCase):
@@ -21,7 +22,7 @@ class CardTextFollowsLargerText(unittest.TestCase):
                 self.assertIn("* dynamicTypeTextScale", block(library, scale))
 
     def test_the_library_stops_growing_at_ax3(self):
-        root = without_comments(read(SWIFT / "Views/RootView.swift"))
+        root = without_comments(read(swift("MenuTabView.swift")))
         self.assertEqual(root.count(".dynamicTypeSize(...DynamicTypeSize.accessibility3)"), 2,
                          "a GameListView is placed without the AX3 cap")
 
@@ -31,7 +32,7 @@ class PromptsAreModal(unittest.TestCase):
     library behind them, and the scrub gesture did not close them."""
 
     def test_the_alert_and_the_context_menu(self):
-        overlays = without_comments(read(OVERLAYS))
+        overlays = without_comments(read(OVERLAYS) + read(ALERT))
         for view in ("struct ControllerGameContextMenu: View", "struct ControllerNavigationAlert: View"):
             with self.subTest(view=view):
                 body = block(overlays, view)

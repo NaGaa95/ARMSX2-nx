@@ -77,6 +77,12 @@ const char* Vulkan::VkResultToString(VkResult res)
 		case VK_ERROR_TOO_MANY_OBJECTS:
 			return "VK_ERROR_TOO_MANY_OBJECTS";
 
+		case VK_ERROR_FRAGMENTED_POOL:
+			return "VK_ERROR_FRAGMENTED_POOL";
+
+		case VK_ERROR_OUT_OF_POOL_MEMORY:
+			return "VK_ERROR_OUT_OF_POOL_MEMORY";
+
 		case VK_ERROR_FORMAT_NOT_SUPPORTED:
 			return "VK_ERROR_FORMAT_NOT_SUPPORTED";
 
@@ -338,7 +344,7 @@ void Vulkan::GraphicsPipelineBuilder::SetShaderStage(
 void Vulkan::GraphicsPipelineBuilder::AddVertexBuffer(
 	u32 binding, u32 stride, VkVertexInputRate input_rate /*= VK_VERTEX_INPUT_RATE_VERTEX*/)
 {
-	pxAssert(m_vertex_input_state.vertexAttributeDescriptionCount < MAX_VERTEX_BUFFERS);
+	pxAssert(m_vertex_input_state.vertexBindingDescriptionCount < MAX_VERTEX_BUFFERS);
 
 	VkVertexInputBindingDescription& b = m_vertex_buffers[m_vertex_input_state.vertexBindingDescriptionCount];
 	b.binding = binding;
@@ -352,7 +358,7 @@ void Vulkan::GraphicsPipelineBuilder::AddVertexBuffer(
 
 void Vulkan::GraphicsPipelineBuilder::AddVertexAttribute(u32 location, u32 binding, VkFormat format, u32 offset)
 {
-	pxAssert(m_vertex_input_state.vertexAttributeDescriptionCount < MAX_VERTEX_BUFFERS);
+	pxAssert(m_vertex_input_state.vertexAttributeDescriptionCount < MAX_VERTEX_ATTRIBUTES);
 
 	VkVertexInputAttributeDescription& a = m_vertex_attributes[m_vertex_input_state.vertexAttributeDescriptionCount];
 	a.location = location;
@@ -541,12 +547,24 @@ void Vulkan::GraphicsPipelineBuilder::SetNoBlendingState()
 
 void Vulkan::GraphicsPipelineBuilder::AddDynamicState(VkDynamicState state)
 {
+	if (HasDynamicState(state))
+		return;
 	pxAssert(m_dynamic_state.dynamicStateCount < MAX_DYNAMIC_STATE);
 
 	m_dynamic_state_values[m_dynamic_state.dynamicStateCount] = state;
 	m_dynamic_state.dynamicStateCount++;
 	m_dynamic_state.pDynamicStates = m_dynamic_state_values.data();
 	m_ci.pDynamicState = &m_dynamic_state;
+}
+
+bool Vulkan::GraphicsPipelineBuilder::HasDynamicState(VkDynamicState state) const
+{
+	for (u32 i = 0; i < m_dynamic_state.dynamicStateCount; i++)
+	{
+		if (m_dynamic_state_values[i] == state)
+			return true;
+	}
+	return false;
 }
 
 void Vulkan::GraphicsPipelineBuilder::SetDynamicViewportAndScissorState()

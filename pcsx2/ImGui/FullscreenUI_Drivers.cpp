@@ -1,22 +1,20 @@
 // SPDX-FileCopyrightText: 2026 ARMSX2 Contributors
 // SPDX-License-Identifier: GPL-3.0+
 
-// Big Picture's "GPU Drivers" settings page: choose the Vulkan driver (the system's or an installed
-// driver pack), download and delete packs, and restart so the choice takes effect. The work is done
-// by Catalog/DriverPacks.h; this file is the page and the threads that call it.
+// Big Picture's "GPU Drivers" settings page, on top of Catalog/DriverPacks.h: choose the Vulkan
+// driver (the system's or an installed pack), download and delete packs, restart to apply.
 //
-// How a choice takes effect: DriverPacks::ApplyEnvironment() reads the selected pack once, early in
-// main(), so a changed selection is used the next time ARMSX2 starts. The page therefore shows two
-// things: what this run is using (DriverPacks::GetLastApplyResult) and what is selected now, and
-// offers "Restart Now" when they differ.
+// DriverPacks::ApplyEnvironment() reads the selected pack once, early in main(), so a changed
+// selection only takes effect on the next start. The page shows what this run is using
+// (DriverPacks::GetLastApplyResult) and what is selected now, and offers "Restart Now" when they differ.
 //
 // Threading: everything here that touches FullscreenUI state runs on the GS thread. The feed listing
-// and the install each run on a thread of their own and only fill s_handoff, then ask the GS thread
+// and the install each run on their own thread and only fill s_handoff, then ask the GS thread
 // (through the CPU thread, which owns the ring) to read it.
 //
 // The settings lock is held while a settings page draws, so the page body reads and writes the
-// selection through the SettingsInterface it is given and never through DriverPacks::GetSelectedPack
-// or SetSelectedPack, which take the lock themselves. Dialog callbacks run with the lock released.
+// selection through the SettingsInterface it is given, never through DriverPacks::GetSelectedPack or
+// SetSelectedPack, which take the lock themselves. Dialog callbacks run with the lock released.
 
 #include "Catalog/CancelToken.h"
 #include "Catalog/DriverPacks.h"
@@ -136,8 +134,6 @@ namespace
 		return *s_state.manager;
 	}
 
-	// ---- small helpers ----------------------------------------------------------------------------
-
 	std::string Trimmed(std::string value)
 	{
 		const size_t first = value.find_first_not_of(" \t\r\n");
@@ -208,11 +204,16 @@ namespace
 		return wayland && !x11;
 	}
 
-	// The window system the GS was given, which is how the GS and window code tell sessions apart
-	// (WindowInfo::Type). Under the Vulkan display path or Wayland the answer is no.
+	// True only when the GS window is an X11 one (WindowInfo::Type); under Wayland or the Vulkan
+	// display path it is false.
 	bool SessionIsX11()
 	{
 		return g_gs_device && g_gs_device->GetWindowInfo().type == WindowInfo::Type::X11;
+	}
+
+	bool SessionIsWayland()
+	{
+		return g_gs_device && g_gs_device->GetWindowInfo().type == WindowInfo::Type::Wayland;
 	}
 
 	bool PackIsUnusableHere(const DP::InstalledDriver& pack)
@@ -236,8 +237,6 @@ namespace
 		s_state.installed_known = true;
 	}
 
-	// ---- what this run uses versus what is selected -------------------------------------------------
-
 	struct Status
 	{
 		enum class Kind
@@ -246,7 +245,7 @@ namespace
 			Pack, ///< a pack is in use
 			Launcher, ///< the launcher set VK_DRIVER_FILES / VK_ICD_FILENAMES; the selection is ignored
 			Missing, ///< a pack was selected at start but is not installed
-			NoGpu, ///< a pack was selected at start but this machine has no Adreno
+			NoGpu, ///< a pack was selected at start but this machine has no GPU of the pack's family
 		};
 
 		Kind kind = Kind::System;
@@ -284,14 +283,14 @@ namespace
 			case DP::ApplyOutcome::SystemDriver:
 			case DP::ApplyOutcome::Unsupported:
 				// With nothing selected, ApplyEnvironment() does not look at the environment, but a launcher
-				// that names a driver (ROCKNIX's does) is in charge all the same. A pack this process applied
-				// has the Applied outcome, so the variables are not ours here.
+				// that names a driver (ROCKNIX's does) still decides. A pack this process applied has the
+				// Applied outcome, so the variables are not ours here.
 				if (EnvironmentSetsDriver())
 					status.kind = Status::Kind::Launcher;
 				break;
 		}
 
-		// A launcher's choice wins whatever is selected here, and without an Adreno there is nothing
+		// A launcher's choice wins whatever is selected here, and without the pack's GPU there is nothing
 		// to switch to. Otherwise a selection that differs from this run's driver needs a restart,
 		// unless it names a pack that is not installed (a restart would not change anything).
 		if (status.kind != Status::Kind::Launcher && status.kind != Status::Kind::NoGpu && selected != status.in_use_id)
@@ -316,6 +315,10 @@ namespace
 			case Status::Kind::Missing:
 				return fmt::format(FSUI_FSTR("The selected driver pack \"{}\" is not installed. The system driver is in use."), apply.pack_id);
 			case Status::Kind::NoGpu:
+				if (apply.gpu == DP::GpuFamily::MaliKbase)
+					return FSUI_STR("A malisx2 driver pack is selected, but this device has no Mali GPU that malisx2 supports on Arm's kernel driver. The system driver is in use.");
+				if (apply.gpu == DP::GpuFamily::Unknown)
+					return FSUI_STR("The selected driver pack is for a GPU this version of ARMSX2 does not know. The system driver is in use.");
 				return FSUI_STR("A driver pack is selected, but this device has no Adreno GPU. The system driver is in use.");
 			case Status::Kind::System:
 				break;
@@ -339,8 +342,6 @@ namespace
 		}
 		return FSUI_STR("System Driver");
 	}
-
-	// ---- worker threads -> GS thread -----------------------------------------------------------------
 
 	// The workers are not the CPU thread, and a push into the GS ring is only allowed from the CPU
 	// thread (MTGS::RunOnGSThread), so hop through it.
@@ -388,9 +389,9 @@ namespace
 		ShowInstallNotice(fmt::format(FSUI_FSTR("Installing {}"), s_state.install_tag), ProgressText(s_state.progress), 10.0f);
 	}
 
-	// GS thread: applies what the workers reported since the last time. The page also calls this when
-	// it draws, so a result that arrived while Big Picture was closed is not lost; the notices need the
-	// UI, the rest does not.
+	// GS thread: applies what the workers reported since the last call. The page also calls this when
+	// it draws, so a result that arrived while Big Picture was closed is not lost (only the notices
+	// need the UI).
 	void DrainHandoff()
 	{
 		std::optional<DP::RemoteListing> listing;
@@ -442,8 +443,7 @@ namespace
 			}
 			else
 			{
-				// The service writes its message for display ("Checksum mismatch: ...", "libwayland-client.so.0:
-				// cannot open shared object file"); show it as it is.
+				// The service's message is already worded for display ("Checksum mismatch: ..."); show it as is.
 				s_state.failure_name = tag;
 				s_state.failure_message = finished->message.empty() ? std::string(FSUI_STR("The install failed.")) : finished->message;
 				if (ui_up)
@@ -528,8 +528,6 @@ namespace
 		});
 	}
 
-	// ---- actions ---------------------------------------------------------------------------------------
-
 	void OnPageEntered()
 	{
 		s_state.availability = DP::GetAvailability();
@@ -538,9 +536,8 @@ namespace
 
 	void DoRestartNow()
 	{
-		// RelaunchAtExit arms a restart that runs when the process ends and cannot be taken back, so
-		// the exit is requested without a prompt the user could cancel: the confirmation, where one
-		// is needed, has been asked already.
+		// RelaunchAtExit arms a restart that cannot be taken back, so the exit is requested without a
+		// prompt the user could cancel; any confirmation has been asked already.
 		std::string error;
 		if (!DP::RelaunchAtExit(&error))
 		{
@@ -637,8 +634,6 @@ namespace
 			false);
 	}
 
-	// ---- the page --------------------------------------------------------------------------------------
-
 	std::string DescribePack(const DP::InstalledDriver& pack)
 	{
 		std::string text;
@@ -662,14 +657,15 @@ namespace
 	{
 		MenuHeading(FSUI_CSTR("GPU Drivers"));
 
-		// "No driver packs for this GPU." is the service's own message for a machine without an Adreno.
+		// "No driver packs for this GPU." is the service's own message for a machine whose GPU no feed is for.
 		if (availability.reason == DP::Availability::Reason::NoMatchingGpu)
 		{
 			if (MenuButton(FSUI_ICONSTR(ICON_FA_CIRCLE_INFO, "No driver packs for this GPU."),
-					FSUI_CSTR("Driver packs are Turnip builds for Qualcomm Adreno GPUs. This device uses its system driver.")))
+					FSUI_CSTR("Driver packs are Turnip for Qualcomm Adreno GPUs and malisx2 for Arm Mali GPUs on Arm's kernel driver. This device uses its system driver.")))
 			{
 				OpenInfoMessageDialog(FSUI_STR("GPU Drivers"),
-					FSUI_STR("Driver packs are Turnip builds for Qualcomm Adreno GPUs. This device has no Adreno GPU, so it keeps using its system driver."));
+					FSUI_STR("Driver packs are Turnip builds for Qualcomm Adreno GPUs and malisx2 builds for Arm Mali GPUs that run Arm's kernel driver (kbase). "
+							 "This device has neither, so it keeps using its system driver."));
 			}
 			return;
 		}
@@ -885,7 +881,7 @@ bool FullscreenUI::ShowDriversSettingsPage()
 	if (!s_supported)
 		return false;
 
-	// The page is for a machine with an Adreno GPU. Elsewhere it stays out of the list unless a pack is
+	// The page is for a machine whose GPU a feed is for. Elsewhere it stays out of the list unless a pack is
 	// installed or selected, which the user may want to undo. The GPU does not change while we run.
 	static const bool s_available = DP::GetAvailability().IsAvailable();
 	if (s_available)
@@ -972,11 +968,9 @@ void FullscreenUI::ShutdownDriversPage()
 	s_state.setup_last_frame = -100;
 }
 
-// ---- first-run setup ---------------------------------------------------------------------------------
-
 bool FullscreenUI::ShouldOfferDriverInSetup()
 {
-	return DP::ShouldOfferInSetup(DP::GetSetupContext(GetManager(), SessionIsX11()));
+	return DP::ShouldOfferInSetup(DP::GetSetupContext(GetManager(), SessionIsX11(), SessionIsWayland()));
 }
 
 bool FullscreenUI::IsDriverSetupInstalling()
@@ -1042,7 +1036,7 @@ void FullscreenUI::DrawDriverSetupStep()
 		{
 			MenuButton(FSUI_ICONSTR(ICON_FA_CIRCLE_NOTCH, "Loading driver list..."), FSUI_CSTR("Asking GitHub which driver packs are available."));
 		}
-		else if (const DP::RemoteDriver* pick = DP::PickRecommended(s_state.listing.drivers))
+		else if (const DP::RemoteDriver* pick = DP::PickRecommended(s_state.listing.drivers, s_state.availability.gpu))
 		{
 			std::string summary = pick->tag;
 			if (pick->size > 0)
@@ -1075,6 +1069,8 @@ void FullscreenUI::DrawDriverSetupStep()
 #if 0
 // TRANSLATION-STRING-AREA-BEGIN
 TRANSLATE_NOOP("FullscreenUI", "Your launcher sets the Vulkan driver itself, so the choice below has no effect.");
+TRANSLATE_NOOP("FullscreenUI", "A malisx2 driver pack is selected, but this device has no Mali GPU that malisx2 supports on Arm's kernel driver. The system driver is in use.");
+TRANSLATE_NOOP("FullscreenUI", "The selected driver pack is for a GPU this version of ARMSX2 does not know. The system driver is in use.");
 TRANSLATE_NOOP("FullscreenUI", "A driver pack is selected, but this device has no Adreno GPU. The system driver is in use.");
 TRANSLATE_NOOP("FullscreenUI", "Using the system driver.");
 TRANSLATE_NOOP("FullscreenUI", "Set by Launcher");
@@ -1104,7 +1100,7 @@ TRANSLATE_NOOP("FullscreenUI", "Wayland only; this is an X11 session");
 TRANSLATE_NOOP("FullscreenUI", "Wayland only");
 TRANSLATE_NOOP("FullscreenUI", "Installed");
 TRANSLATE_NOOP("FullscreenUI", "GPU Drivers");
-TRANSLATE_NOOP("FullscreenUI", "Driver packs are Turnip builds for Qualcomm Adreno GPUs. This device has no Adreno GPU, so it keeps using its system driver.");
+TRANSLATE_NOOP("FullscreenUI", "Driver packs are Turnip builds for Qualcomm Adreno GPUs and malisx2 builds for Arm Mali GPUs that run Arm's kernel driver (kbase). This device has neither, so it keeps using its system driver.");
 TRANSLATE_NOOP("FullscreenUI", "Driver packs are only offered on Linux.");
 TRANSLATE_NOOP("FullscreenUI", "Driver In Use");
 TRANSLATE_NOOP("FullscreenUI", "The selected driver pack was built for Wayland sessions only, and ARMSX2 is running in an X11 session. It will probably not be able to show a picture. Choose the system driver or another pack, or start ARMSX2 in a Wayland session.");
@@ -1113,7 +1109,7 @@ TRANSLATE_NOOP("FullscreenUI", "Pre-release");
 TRANSLATE_NOOP("FullscreenUI", "Installing");
 TRANSLATE_NOOP("FullscreenUI", "Download");
 TRANSLATE_NOOP("FullscreenUI", "The feed has no driver packs for this device right now.");
-TRANSLATE_NOOP("FullscreenUI", "Driver packs are Turnip builds for Qualcomm Adreno GPUs. This device uses its system driver.");
+TRANSLATE_NOOP("FullscreenUI", "Driver packs are Turnip for Qualcomm Adreno GPUs and malisx2 for Arm Mali GPUs on Arm's kernel driver. This device uses its system driver.");
 TRANSLATE_NOOP("FullscreenUI", "Current Driver");
 TRANSLATE_NOOP("FullscreenUI", "The driver you chose applies the next time ARMSX2 starts. Restarting closes ARMSX2 and the running game, then opens it again.");
 TRANSLATE_NOOP("FullscreenUI", "The driver you chose applies the next time ARMSX2 starts. Restart now to use it; ARMSX2 opens again with the same options.");

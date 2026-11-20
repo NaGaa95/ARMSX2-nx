@@ -167,6 +167,7 @@ u8* armStartBlock()
 	// every displacement computed from it remain in execute space.
 	armAsm = new (s_armAsmStorage) vixl::aarch64::MacroAssembler(
 		static_cast<vixl::byte*>(armGetWritableCodePtr(armAsmPtr)), armAsmCapacity);
+	armAsm->SetCPUFeatures(armBaselineCPUFeatures());
 	armAsm->GetScratchVRegisterList()->Remove(31);
 	armAsm->GetScratchRegisterList()->Remove(RSCRATCHADDR.GetCode());
 	return armAsmPtr;
@@ -232,22 +233,17 @@ void armPatchCodeWord(void* site, u32 instr)
 		HostSys::EndCodeWriteRange(rx_site, sizeof(u32));
 }
 
-// The granule the cache-maintenance ops work on, read from CTR_EL0. This is a
-// different question from HostSys::GetRuntimeCacheLineSize(), which reports the
-// largest DATA line size so structures can be padded against false sharing;
-// what a CMO needs is the architected minimum line, and using the larger of the
-// two would skip lines. IminLine is CTR_EL0 bits 3:0 and DminLine bits 19:16,
-// both log2 of a count of 4-byte words. Take the smaller so one address list
-// covers both loops — a coarser line just gets its CMO issued more than once,
-// which is redundant, not wrong.
+// Granule for the cache-maintenance ops, from CTR_EL0: the smaller of IminLine
+// (bits 3:0) and DminLine (bits 19:16), each log2 of a count of 4-byte words.
+// The smaller one lets a single address list serve both the D and I loops; a
+// granule finer than the real line only issues a redundant CMO. This is not
+// HostSys::GetRuntimeCacheLineSize(), which reports the largest data line for
+// false-sharing padding; using that here would skip lines.
 //
-// Not on Darwin. XNU does not expose CTR_EL0 to EL0, so the read is an illegal
-// instruction there — recompiler_tests died on it in CI the first time the
-// pass ran on macOS. The Darwin flusher below never issues a CMO itself; it
-// hands sys_icache_invalidate ranges built from these lines, and any granule
-// that covers the patched word gives a correct range. 64 is the smallest line
-// any Apple core has shipped with, so the runs it builds are no coarser than
-// they need to be.
+// Darwin: XNU does not expose CTR_EL0 to EL0, so the read is an illegal
+// instruction. The Darwin flusher only builds ranges for sys_icache_invalidate,
+// so any granule covering the patched word works; 64 is the smallest line an
+// Apple core has shipped with.
 static size_t armCodePatchGranule()
 {
 #ifdef __APPLE__
@@ -282,12 +278,10 @@ void ArmCodePatchFlusher::Finish()
 		return;
 
 #ifdef __APPLE__
-	// sys_icache_invalidate (what HostSys::FlushInstructionCache calls here) is
-	// the sanctioned interface on Darwin and the only one that stays correct
-	// under the iOS dual-map and Legacy W^X modes, so this path coalesces the
-	// touched lines into runs and flushes each run instead of issuing CMOs by
-	// hand. One call per run rather than one per word; a run costs an
-	// invalidate of the gaps inside it, which is why the gap cap is a page.
+	// sys_icache_invalidate (via HostSys::FlushInstructionCache) is the only
+	// interface that stays correct under iOS dual-map and Legacy W^X, so touched
+	// lines are coalesced into runs, one call per run. A run also invalidates
+	// the gaps inside it, hence the page-sized gap cap.
 	std::sort(m_lines.begin(), m_lines.end());
 	const size_t granule = armCodePatchGranule();
 	constexpr uintptr_t kMaxGap = 4096;
@@ -307,11 +301,8 @@ void ArmCodePatchFlusher::Finish()
 	}
 	HostSys::FlushInstructionCache(reinterpret_cast<void*>(lo), static_cast<u32>(hi - lo));
 #else
-	// Clean every touched line to the point of unification, one barrier, then
-	// invalidate all of them for instruction fetch, then the closing pair. The
-	// `dsb ish` between the two loops is architecturally required — the clean
-	// has to have completed before the invalidate — and it is exactly the
-	// barrier a per-site flush would pay once per word instead of once per set.
+	// The `dsb ish` between the two loops is required: the clean has to
+	// complete before the invalidate.
 	for (const uintptr_t line : m_lines)
 		__asm__ __volatile__("dc cvau, %0" : : "r"(line) : "memory");
 	__asm__ __volatile__("dsb ish" : : : "memory");
@@ -548,7 +539,12 @@ void armMoveAddressToReg(const vixl::aarch64::Register& reg, const void* addr)
 		}
 		if (armAddressRecorder)
 			armAddressRecorder->OnAdrp(armGetCurrentCodePointer() - 4, addr);
-		armAsm->Add(reg, reg, page_offset);
+		// Always emit the add, even for page-aligned addresses: a lone ADRP followed by a load or store through
+		// it can hit Cortex-A53 erratum 843419, and the linker fix doesn't cover JIT code.
+		{
+			a64::SingleEmissionCheckScope guard(armAsm);
+			armAsm->add(reg, reg, page_offset);
+		}
 	}
 	else if (vixl::IsInt21(page_displacement) && a64::Assembler::IsImmLogical(page_offset, 64))
 	{
@@ -706,6 +702,7 @@ u8* ArmConstantPool::GetJumpTrampoline(const void* target)
 	HostSys::BeginCodeWriteRange(trampoline_ptr, TRAMPOLINE_WRITE_WINDOW);
 	// Emit into the RW alias; trampoline_ptr (RX) is what callers branch to.
 	a64::MacroAssembler masm(static_cast<vixl::byte*>(armGetWritableCodePtr(trampoline_ptr)), m_capacity - offset);
+	masm.SetCPUFeatures(armBaselineCPUFeatures());
 	masm.Mov(RXVIXLSCRATCH, reinterpret_cast<intptr_t>(target));
 	masm.Br(RXVIXLSCRATCH);
 	masm.FinalizeCode();

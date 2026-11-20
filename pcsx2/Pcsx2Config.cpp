@@ -417,7 +417,7 @@ Pcsx2Config::SpeedhackOptions& Pcsx2Config::SpeedhackOptions::DisableAll()
 	bitset = 0;
 	EECycleRate = 0;
 	EECycleSkip = 0;
-	iopThreadLag = IopThread::kDefaultLag;
+	iopThreadLag = IopThread::kDefaultSettingLag;
 
 	return *this;
 }
@@ -436,6 +436,7 @@ void Pcsx2Config::SpeedhackOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitBool(vu1Instant);
 	SettingsWrapBitBool(iopThread);
 	SettingsWrapBitBool(iopThreadLockstep);
+	SettingsWrapBitBool(iopThreadDeferSif);
 	SettingsWrapEntry(iopThreadLag);
 	SettingsWrapBitBool(DynamicEECycleRate);
 	SettingsWrapEntry(DynamicEECycleRateTrace);
@@ -783,6 +784,7 @@ Pcsx2Config::GSOptions::GSOptions()
 	LinearPresent = GSPostBilinearMode::BilinearSmooth;
 	UseDebugDevice = false;
 	UseBlitSwapChain = false;
+	DisableSwapChainPreRotation = false;
 	DisableShaderCache = false;
 	PrecompilePipelines = true;
 	DisableFramebufferFetch = false;
@@ -994,6 +996,7 @@ bool Pcsx2Config::GSOptions::IsRestartOption(const char* ini_key)
 		"UseDebugDevice",
 		"DebugLabels",
 		"UseBlitSwapChain",
+		"DisableSwapChainPreRotation",
 		"DisableShaderCache",
 		"PrecompilePipelines",
 		"DisableFramebufferFetch",
@@ -1024,6 +1027,7 @@ bool Pcsx2Config::GSOptions::RestartOptionsAreEqual(const GSOptions& right) cons
 		   // instance creation -- toggling it in place would silently do nothing.
 		   OpEqu(DebugLabels) &&
 		   OpEqu(UseBlitSwapChain) &&
+		   OpEqu(DisableSwapChainPreRotation) &&
 		   OpEqu(DisableShaderCache) &&
 		   OpEqu(PrecompilePipelines) &&
 		   OpEqu(DisableFramebufferFetch) &&
@@ -1081,6 +1085,7 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitBool(DebugLabels);
 	SettingsWrapBitBool(DumpDrawLog);
 	SettingsWrapBitBool(UseBlitSwapChain);
+	SettingsWrapBitBool(DisableSwapChainPreRotation);
 	SettingsWrapBitBool(DisableShaderCache);
 	SettingsWrapBitBool(PrecompilePipelines);
 	SettingsWrapBitBool(DisableFramebufferFetch);

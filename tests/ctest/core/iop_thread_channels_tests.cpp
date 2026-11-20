@@ -38,8 +38,6 @@ namespace
 {
 	constexpr u64 kStressItems = IOP_CHANNELS_STRESS_ITEMS;
 
-	// ---------------------------------------------------------------- helpers for the stress tests
-
 	void CpuRelax()
 	{
 #if defined(__aarch64__)
@@ -219,11 +217,9 @@ namespace
 	// watermark of 0 means "nothing posted yet".
 	u64 StampOf(u64 i) { return 1 + (i / 2) * 5; }
 
-	// ---------------------------------------------------------------- the E2I ring under two threads
-
 	// The EE posts items and publishes a watermark after them; the IOP loads the watermark and
-	// applies every item stamped at or before it. Design 3.9: "ee_wm: every item stamped <= ee_wm is
-	// visible". Checked here as: when the watermark covers the next item, the ring must hand it over.
+	// applies every item stamped at or before it. Checked here as: when the watermark covers the
+	// next item, the ring must hand it over.
 	template <size_t N>
 	StressStats RunE2IStress(u64 items, u64 seed, std::string& failure)
 	{
@@ -345,8 +341,6 @@ namespace
 		return stats;
 	}
 
-	// ---------------------------------------------------------------- the I2E queue under two threads
-
 	template <size_t N>
 	StressStats RunI2EStress(u64 items, u64 seed, std::string& failure)
 	{
@@ -361,7 +355,7 @@ namespace
 			for (u64 i = 0; i < items; i++)
 			{
 				jitter.Step();
-				while (!queue->TryPush(KindOf(i), ArgOf(i)))
+				while (!queue->TryPush(KindOf(i), ArgOf(i), static_cast<u32>(StampOf(i) * 40503u)))
 				{
 					producer_stats.full_hits++;
 					if (log.Failed())
@@ -423,7 +417,7 @@ namespace
 					if (!got)
 						break;
 
-					if (item.kind != KindOf(next) || item.arg != ArgOf(next) || item.pad != 0)
+					if (item.kind != KindOf(next) || item.arg != ArgOf(next) || item.pad != 0 || item.stamp != static_cast<u32>(StampOf(next) * 40503u))
 					{
 						log.Fail("item " + std::to_string(next) + " came out as kind " + std::to_string(item.kind) +
 								 " arg " + std::to_string(item.arg));
@@ -473,11 +467,9 @@ namespace
 	}
 } // namespace
 
-// ================================================================ layout
-
 TEST(IopChannelsLayout, TheCapacitiesAreThePowersOfTwoTheDesignNames)
 {
-	EXPECT_EQ(kE2IRingCapacity, 1024u);
+	EXPECT_EQ(kE2IRingCapacity, 8192u);
 	EXPECT_EQ(kI2EQueueCapacity, 256u);
 	EXPECT_EQ(kE2IRingCapacity & (kE2IRingCapacity - 1), 0u);
 	EXPECT_EQ(kI2EQueueCapacity & (kI2EQueueCapacity - 1), 0u);
@@ -488,7 +480,7 @@ TEST(IopChannelsLayout, TheCapacitiesAreThePowersOfTwoTheDesignNames)
 TEST(IopChannelsLayout, TheItemsHaveTheSizesTheDesignGives)
 {
 	EXPECT_EQ(sizeof(E2IItem), 16u);
-	EXPECT_EQ(sizeof(I2EItem), 8u);
+	EXPECT_EQ(sizeof(I2EItem), 12u);
 }
 
 TEST(IopChannelsLayout, TheLineSizeCoversTheAppleM2AndTheProjectConstant)
@@ -554,8 +546,6 @@ TEST(IopChannelsLayout, ARingStartsOnALineAndTheKickWordAndTheCommandFlagsOwnThe
 	EXPECT_EQ(sizeof(KickBits) % kChannelLineSize, 0u);
 	EXPECT_GE(alignof(HostCommandQueue), kChannelLineSize);
 }
-
-// ================================================================ StampedRing, one thread
 
 TEST(StampedRing, ANewRingIsEmpty)
 {
@@ -869,8 +859,6 @@ TEST(StampedRing, TheSpscRingBehindItReportsTheItemPushedLast)
 	}
 }
 
-// ================================================================ I2EQueue, one thread
-
 TEST(I2EQueue, ANewQueueIsEmpty)
 {
 	I2EQueue<8> queue;
@@ -902,6 +890,20 @@ TEST(I2EQueue, ItemsComeOutInTheOrderTheyWentIn)
 	EXPECT_FALSE(queue.MayHaveItems());
 }
 
+TEST(I2EQueue, TheStampTravelsWithTheItemInOrder)
+{
+	I2EQueue<8> queue;
+	for (u32 i = 0; i < 6; i++)
+		ASSERT_TRUE(queue.TryPush(static_cast<u16>(i), 100 + i, 0xFFFFFF00u + i * 3));
+	for (u32 i = 0; i < 6; i++)
+	{
+		I2EItem out{};
+		ASSERT_TRUE(queue.TryPop(out));
+		EXPECT_EQ(out.arg, 100u + i);
+		EXPECT_EQ(out.stamp, 0xFFFFFF00u + i * 3);
+	}
+}
+
 TEST(I2EQueue, ADefaultArgumentIsZero)
 {
 	I2EQueue<4> queue;
@@ -910,6 +912,7 @@ TEST(I2EQueue, ADefaultArgumentIsZero)
 	ASSERT_TRUE(queue.TryPop(out));
 	EXPECT_EQ(out.kind, 9u);
 	EXPECT_EQ(out.arg, 0u);
+	EXPECT_EQ(out.stamp, 0u);
 }
 
 TEST(I2EQueue, ItIsFullAfterCapacityItemsAndThenRefusesWithoutLosingAnything)
@@ -1034,8 +1037,6 @@ TEST(I2EQueue, ResetEmptiesIt)
 	EXPECT_FALSE(queue.TryPush(9));
 }
 
-// ================================================================ KickBits
-
 TEST(KickBits, ANewWordHasNothingUp)
 {
 	KickBits kicks;
@@ -1158,8 +1159,6 @@ TEST(KickBits, TheSifPatternQueuesOneEntryNoMatterHowManyRaises)
 	EXPECT_EQ(kicks.Pending(), 0u);
 	EXPECT_FALSE(queue.MayHaveItems());
 }
-
-// ================================================================ HostCommandQueue, one thread
 
 TEST(HostCommandQueue, ANewQueueHasNothingToRun)
 {
@@ -1295,8 +1294,6 @@ TEST(HostCommandQueue, ACommandCanOwnItsStateThroughASharedPointer)
 	EXPECT_EQ(result, 42);
 	EXPECT_EQ(*state, 42);
 }
-
-// ================================================================ HostCommandQueue, threads
 
 TEST(HostCommandQueueThreads, ACommandPostedOnAnotherThreadRunsOnTheCallingThread)
 {
@@ -1452,8 +1449,6 @@ TEST(HostCommandQueueThreads, SeveralPostingThreadsLoseNothingAndKeepEachOnesOrd
 	EXPECT_EQ(queue.CompletedCount(), u64(kPosters) * kPerPoster);
 }
 
-// ================================================================ two-thread stress
-
 TEST(IopChannelsStress, StampedRingTinyRingNeverLosesOrReordersAnything)
 {
 	std::string failure;
@@ -1498,7 +1493,6 @@ TEST(IopChannelsStress, I2EQueueAtTheDesignCapacityNeverLosesOrReordersAnything)
 
 TEST(IopChannelsStress, StampedRingNeverShowsAWatermarkAheadOfItsItems)
 {
-	// Other seeds, to move the pauses around.
 	for (u64 seed = 10; seed < 13; seed++)
 	{
 		std::string failure;
@@ -1509,7 +1503,7 @@ TEST(IopChannelsStress, StampedRingNeverShowsAWatermarkAheadOfItsItems)
 
 TEST(IopChannelsStress, KickBitsRaisedUnderRandomDelaysQueueOneEntryPerRaiseThatWon)
 {
-	// The SIF protocol of design 3.5 between two threads. The IOP raises a channel's bit and, if the
+	// The SIF kick protocol between two threads. The IOP raises a channel's bit and, if the
 	// raise took the bit from clear, queues one entry for it; if the queue is full it retries, so
 	// the bit never sits up with nothing queued. The EE pops an entry, takes that channel's bit,
 	// and counts it.
@@ -1747,7 +1741,6 @@ TEST(IopChannelsStress, HostCommandQueueNeverLosesOrReordersACommand)
 				executed.store(i + 1, std::memory_order_relaxed);
 			});
 
-			// Now and then look at what the completion count promises.
 			if ((i & 1023) == 1023)
 			{
 				const u64 completed = queue.CompletedCount();

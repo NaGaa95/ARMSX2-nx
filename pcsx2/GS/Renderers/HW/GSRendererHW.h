@@ -4,6 +4,7 @@
 #pragma once
 
 #include "GSTextureCache.h"
+#include "GS/Renderers/HW/GSBurstMemo.h"
 #include "GS/Renderers/HW/GSDrawAlphaMask.h"
 #include "GS/Renderers/Common/GSBlendCarry.h"
 #include "GS/Renderers/Common/GSFunctionMap.h"
@@ -100,6 +101,8 @@ private:
 	u32 GetConstantDirectWriteMemClearDepth() const;
 	bool IsReallyDithered() const;
 	bool AreAnyPixelsDiscarded() const;
+	/// Whether this draw's sprites, as they stand, write every pixel of m_r (GSAlphaKnownRects).
+	bool SpritesWriteEveryPixelOfDrawRect() const;
 	bool IsDiscardingDstColor();
 	bool IsDiscardingDstRGB();
 	bool IsDiscardingDstAlpha() const;
@@ -215,6 +218,8 @@ private:
 	CLUTDrawTestResult PossibleCLUTDraw();
 	CLUTDrawTestResult PossibleCLUTDrawAggressive();
 	bool CanUseSwPrimRender(bool no_rt, bool no_ds, bool draw_sprite_tex);
+	/// Writes held depth words (GSTextureCache::MaterialiseHeldPages) under what the copy road reads and writes.
+	void MaterialiseHeldUnderCopy();
 	bool (*SwPrimRender)(GSRendererHW&, bool invalidate_tc, bool add_ee_transfer);
 
 	bool SnapSpriteEdgesToPixelGrid();
@@ -235,7 +240,8 @@ private:
 	/// What the exact alpha-mask rules can do with this draw's alpha FBMSK without changing a
 	/// pixel -- clear it outright, have the shader write the target's known bits in its place, or
 	/// nothing -- and where nothing, why. The verdict drives the drop and the substitution below.
-	u8 DecideExactAlphaMaskDrop(const GSTextureCache::Target* rt, u32 fbmask);
+	/// `known` receives what the decision relied on about the target's alpha.
+	u8 DecideExactAlphaMaskDrop(const GSTextureCache::Target* rt, u32 fbmask, GSAlphaKnownRects::ForDraw& known);
 	void ResolveHeldAlphaMask();
 	/// The alpha mask this draw asked for, which is not the one the shader ends up emulating once
 	/// the exact drop has cleared it. See GSDrawAlphaMask.h.
@@ -256,6 +262,9 @@ private:
 		bool& target_region, GSVector2i& unscaled_size, float& scale, GSDevice::RecycledTexture& src_copy);
 	bool CanUseTexIsFB(const GSTextureCache::Target* rt, const GSTextureCache::Source* tex,
 		const TextureMinMaxResult& tmm);
+	bool HazardCopyCoversSampling(const GSTextureCache::Target* rt, const GSTextureCache::Target* ds,
+		const GSTextureCache::Source* tex, const GSVector4& copied_rect, const GSVector2i& copy_size,
+		const GSVector2i& scaled_copy_size, float scale);
 
 	/// The texel step per native pixel that every sprite of this draw agrees on, per axis, in the
 	/// GS's own sixteenths. False -- and both steps zeroed -- when the draw has no sprites or two of
@@ -277,7 +286,8 @@ private:
 
 	void CalculateAlphaRange(GSTextureCache::Target* rt, GSTextureCache::Target* ds, DATEOptions& date_options,
 		int& blend_alpha_min, int& blend_alpha_max, int& rt_new_alpha_min, int& rt_new_alpha_max,
-		GSAlphaKnownBits::Known& rt_new_alpha_known, bool& rt_new_alpha_via_union);
+		GSAlphaKnownBits::Known& rt_new_alpha_known, bool& rt_new_alpha_via_union,
+		GSAlphaKnownRects::Set& rt_new_alpha_rects);
 	void DetermineAlphaScaling(GSTextureCache::Target* rt, GSTextureCache::Source* tex,
 		bool req_source_update, int rt_new_alpha_max, bool& can_scale_rt_alpha, bool& new_scale_rt_alpha);
 
@@ -301,6 +311,7 @@ private:
 	void SetTCOffset();
 	bool NextDrawColClip() const;
 	bool IsColClipCounterDraw() const;
+	bool SetupStencilCounterDraw(GSTextureCache::Target* rt);
 	bool IsPossibleChannelShuffle() const;
 	bool IsPageCopy() const;
 	bool NextDrawMatchesShuffle() const;
@@ -392,9 +403,13 @@ private:
 	GSTextureCache::Target* m_last_rt;
 
 	// GSAlphaBitLogicOp: the target whose last destination-alpha draw could have shared a stencil
-	// copy, and its DATM. A second such draw with only marks or nothing on that target in between
-	// takes Stencil DATE and reuses the copy.
+	// copy, and its DATM. See the comment where m_date_draw_shares_copy is set.
 	GSTexture* m_date_chain_rt = nullptr;
+
+	// SetupStencilCounterDraw's index order, by sign, and its per-primitive scratch. The draw points at the
+	// indices until the backend has issued it.
+	std::vector<u16> m_stencil_counter_indices;
+	std::vector<u8> m_stencil_counter_signs;
 	u8 m_date_chain_datm = 0;
 
 	// Blend carry-over (GSBlendCarry.h): the last blended draw of the donor class, and whether the draw in
@@ -446,7 +461,52 @@ private:
 	// software sprite renderer state
 	GSSwPrimRenderState m_sw_prim;
 
+	// The burst memo (GSBurstMemo.h, GSRendererHWBurstMemo.cpp): copy-road draws recorded as they run, and
+	// skipped when a later burst repeats them.
+	GSBurstMemo::Memo m_burst_memo;
+	bool m_burst_memo_enabled = false;
+	/// Set by CanUseSwPrimRender: its true verdict rests on finding no target at the texture (if any) and, when
+	/// it looked there, at the frame. Only such a verdict can be reused by a skipped draw.
+	bool m_copy_road_no_targets = false;
+	bool m_copy_road_frame_checked = false;
+
+	bool BurstMemoSkip();
+	bool BurstMemoWakes() const;
+	bool BurstMemoBeforeCopy();
+	void BurstMemoAfterCopy(bool recorded, bool copied);
+	bool BurstMemoTryHit();
+	bool BurstMemoHit();
+	void BurstMemoApply(const GSBurstMemo::Record& d);
+	void BurstMemoCloseRecording();
+	void BurstMemoEndSequence();
+	/// Closes the burst being recorded and ends the one being skipped, calling out only when there is one: most
+	/// draws a title makes pass here with neither.
+	void BurstMemoStop()
+	{
+		if (m_burst_memo.recording)
+			BurstMemoCloseRecording();
+		if (!m_burst_memo.candidates.empty() || m_burst_memo.position)
+			BurstMemoEndSequence();
+	}
+	void BurstMemoEndFrame(bool idle_frame);
+	void BurstMemoInvalidate(u32 bp, u32 bw, u32 psm, const GSVector4i& r);
+	void BurstMemoFlushWaitingSlow();
+	/// Makes the texture cache invalidations skipped draws left waiting: before anything that reads the texture
+	/// cache.
+	void BurstMemoFlushWaiting()
+	{
+		if (m_burst_memo.pending_count)
+			BurstMemoFlushWaitingSlow();
+	}
+	bool BurstMemoPagesWrittenSince(const std::vector<u32>& pages, u64 seq) const;
+	u64 BurstMemoPaletteHash(u32 entries);
+	bool BurstMemoTargetAt(u32 bp, u32 psm) const;
+
 public:
+	/// Re-reads the settings the burst memo depends on, and forgets what it recorded.
+	void RefreshBurstMemo();
+	bool SkipMemoizedDraw() override;
+
 	GSRendererHW();
 	virtual ~GSRendererHW() override;
 
@@ -515,6 +575,7 @@ public:
 
 	void PurgeTextureCache(bool sources, bool targets, bool hash_cache) override;
 	void ReadbackTextureCache() override;
+	void MaterialiseHeldLocalMemory() override;
 
 	GSTexture* LookupPaletteSource(u32 CBP, u32 CPSM, u32 CBW, GSVector2i& offset, float* scale, const GSVector2i& size) override;
 

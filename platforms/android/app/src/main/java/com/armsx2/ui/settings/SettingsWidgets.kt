@@ -211,11 +211,10 @@ internal object SettingsControllerNav {
     private val selectedId = mutableStateOf<String?>(null)
 
     /** How many screens laid out in side-by-side columns are up (the texture and patch managers),
-     *  held through [ColumnControllerNav]. While any is, and no modal owns input, Up/Down keep to
-     *  the selection's column and Left/Right reach the next column even where nothing sits level
-     *  with the selection; otherwise a two-column screen walked up and down both columns
-     *  interleaved, and Left/Right did nothing. A count, so two such screens overlapping in a
-     *  transition cannot switch it off for each other. */
+     *  counted through [ColumnControllerNav]. While any is up and no modal owns input, Up/Down stay
+     *  in the selection's column and Left/Right reach the next column even where nothing sits level
+     *  with the selection. A count, so two such screens overlapping in a transition cannot switch
+     *  it off for each other. */
     internal var columnScreens = 0
     val selectedIndex = mutableIntStateOf(-1)
     val scrollVelocity = mutableFloatStateOf(0f)
@@ -575,6 +574,9 @@ internal fun Modifier.controllerFocusable(
     onConfirm: (() -> Unit)? = null,
     onLeft: (() -> Unit)? = null,
     onRight: (() -> Unit)? = null,
+    // False for a stop that should not draw the selection ring, such as the paragraphs of an
+    // opened release on the news board, where the card itself carries it
+    ring: Boolean = true,
 ): Modifier = composed {
     // Which layer this control belongs to is decided by WHERE IT SITS, not by an argument the
     // call site has to remember to pass. That is what lets an unmodified ToggleRow or slider be
@@ -648,7 +650,7 @@ internal fun Modifier.controllerFocusable(
             // Only while the pad drives the UI: Compose focus lands on controls by itself (the
             // first focusable one when the game surface lets go), and under touch a ring there is
             // a selection nobody made.
-            if ((focused || selected) && com.armsx2.ui.common.PadInput.active.value) {
+            if (ring && (focused || selected) && com.armsx2.ui.common.PadInput.active.value) {
                 // Driver-safe selection ring: solid inner + translucent outer border. We
                 // deliberately avoid Modifier.shadow with a custom ambient/spot color here —
                 // Adreno / Mali / Turnip drivers frequently ignore the tint and render the
@@ -763,6 +765,8 @@ fun ToggleRow(
     value: Boolean,
     description: String? = null,
     field: String? = null,
+    // The controller focus id; pass one where the same label repeats on a screen.
+    focusId: String = label,
     onChange: (Boolean) -> Unit,
 ) {
     val tint = rowTint(field)
@@ -778,9 +782,8 @@ fun ToggleRow(
             .fillMaxWidth()
             .padding(vertical = 5.dp)
             .controllerFocusable(
-                controllerId = "toggle:$label",
-                // Only A flips it: Left/Right are for moving, and on a switch they flipped it by
-                // accident on the way past.
+                controllerId = "toggle:$focusId",
+                // Only A flips it, so Left/Right can move focus past the switch without toggling it.
                 onConfirm = { emit(!value) },
             ),
         shape = RoundedCornerShape(22.dp),

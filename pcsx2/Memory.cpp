@@ -109,10 +109,10 @@ bool SysMemory::AllocateMemoryMap()
 		return false;
 	}
 
-	// Constant-VA placement, from the on-disk VU program cache: on arm64 the
-	// data + code reservations sit at the same VAs every run. Cached code no
-	// longer depends on it (its data-arena addresses are fixups), but a fixed
-	// arena keeps a cached ADRP's ±4GB reach from the code slab. 4GB clears the
+	// Constant-VA placement for the on-disk VU program cache: on arm64 the data +
+	// code reservations sit at the same VAs every run. Cached code does not need
+	// that (its data-arena addresses are fixups), but a fixed arena keeps a cached
+	// ADRP within ±4GB of the code slab. 4GB clears the
 	// ASLR brk window (non-PIE image at 0x400000 + brk randomization < 2GB) and
 	// sits far below the mmap_base / PIE-load regions, so the slot-0 candidate
 	// succeeds deterministically; Create() walks 256MB-stride fallback slots and
@@ -157,6 +157,16 @@ bool SysMemory::AllocateMemoryMap()
 			DarwinMisc::iPSX2_FORCE_EE_INTERP = 1;
 			Console.Warning("iOS executable code-memory allocation failed; continuing with interpreter providers");
 			std::fprintf(stderr, "@@JIT_FALLBACK@@ reason=ios_code_alloc_failed backend=interpreter\n");
+			std::fflush(stderr);
+		}
+		else if (DarwinMisc::VerifyCodeExecutes(s_code_memory, HostMemoryMap::CodeSize) == 0)
+		{
+			// Mapped but not executable: the recompiler would fault on its first block.
+			DarwinMisc::MunmapCodeDualMap(s_code_memory, HostMemoryMap::CodeSize);
+			s_code_memory = nullptr;
+			DarwinMisc::iPSX2_FORCE_EE_INTERP = 1;
+			Console.Warning("iOS code memory does not execute; continuing with interpreter providers");
+			std::fprintf(stderr, "@@JIT_FALLBACK@@ reason=exec_selftest_failed backend=interpreter\n");
 			std::fflush(stderr);
 		}
 		else
@@ -397,6 +407,14 @@ void* SysMemory::GetDataFileHandle()
 	return s_data_memory_file_handle;
 }
 
+void SysMemory::ZeroData(void* ptr, size_t size)
+{
+	const size_t offset = static_cast<u8*>(ptr) - s_data_memory;
+	pxAssert(offset + size <= HostMemoryMap::MainSize);
+	if (!HostSys::DiscardSharedMemory(s_data_memory_file_handle, offset, size))
+		std::memset(ptr, 0, size);
+}
+
 bool memGetExtraMemMode()
 {
 	return s_extra_memory;
@@ -404,23 +422,9 @@ bool memGetExtraMemMode()
 
 void memSetExtraMemMode(bool mode)
 {
-#ifdef ARCH_ARM64
-	// The ARM64 EE recompiler sizes its LUT, recRAM, recRAMCopy and the
-	// manual_page/manual_counter arrays to Ps2MemSize::ExposedRam, as x86 does,
-	// but the 128MB map has only ever run on it for the Namco System 246/256
-	// boards, whose games need it (PCSX2x6 turns it on for every one of them).
-	// Everywhere else the option stays refused, exactly as before: a console game
-	// that has been fine on 32MB is not the place to find out what else assumes
-	// them. The interpreter handles the 128MB map fine, so gate on the
-	// recompiler only.
-	if (mode && EmuConfig.Cpu.Recompiler.EnableEE && !Arcade::IsActive())
-	{
-		Console.Warning("Extended RAM (128MB) is not supported by the ARM64 EE recompiler; ignoring it. "
-						"Disable the EE recompiler if you need it.");
-		mode = false;
-	}
-#endif
-
+	// Both EE recompilers size their LUT, recRAM, recRAMCopy and the manual_page/manual_counter
+	// arrays to Ps2MemSize::ExposedRam and rebuild them when it changes, so the 128MB map runs
+	// on either of them as on the interpreter.
 	s_extra_memory = mode;
 
 	// update the amount of RAM exposed to the VM
@@ -606,9 +610,8 @@ void memMapPhy()
 
 	// Various ROMs (all read-only)
 	vtlb_MapBlock(eeMem->ROM,	0x1fc00000, Ps2MemSize::Rom);
-	// An arcade COH-H board has no ROM1 at 0x1e000000: its rom1: is declared by rom0:ACDEV, on the IOP
-	// side (PCSX2x6). PCSX2x6 maps it at 0xB0000000 instead, which is past the end of the EE physical
-	// map; the visible effect is nothing here, which is what an arcade session gets.
+	// An arcade COH-H board has no ROM1 at 0x1e000000: its rom1: is declared by rom0:ACDEV on the
+	// IOP side, so nothing is mapped here.
 	if (!Arcade::IsActive())
 		vtlb_MapBlock(eeMem->ROM1,	0x1e000000, Ps2MemSize::Rom1);
 	vtlb_MapBlock(eeMem->ROM2,	0x1e400000, Ps2MemSize::Rom2);
@@ -1372,7 +1375,7 @@ void memReset()
 	s_dve_regs[0x7e] = 0x1C; // Status register. 0x1C seems to be the value it's expecting for everything being OK.
 
 	// BIOS is included in eeMem, so it needs to be copied after zeroing.
-	std::memset(eeMem, 0, sizeof(*eeMem));
+	SysMemory::ZeroData(eeMem, sizeof(*eeMem));
 	CopyBIOSToMemory();
 }
 
@@ -1394,8 +1397,8 @@ bool SaveStateBase::memFreeze(Error* error)
 
 	if (extra_memory != s_extra_memory)
 	{
-		Error::SetStringFmt(error, "Memory size mismatch, save state requires {}, but VM currently has {}.",
-			extra_memory ? "128MB" : "32MB", s_extra_memory ? "128MB" : "32MB");
+		Error::SetStringFmt(error, "Memory size mismatch, this state was saved with Extended RAM {} (RAM size {}).",
+			extra_memory ? "on" : "off", extra_memory ? "128MB" : "32MB");
 		return false;
 	}
 

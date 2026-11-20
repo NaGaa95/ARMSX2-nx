@@ -929,6 +929,7 @@ __fi void mVUinitFirstPass(mV, uptr pState, u8* thisPtr)
 	// The indirection is kept so an alternate code source can repoint hostEntry
 	// at a prepared block without disturbing the code-cache slot tracking.
 	mVUblock.hostEntry = thisPtr;
+	mVUblock.extent = 0; // set by mVUcompile when the block's code is done
 
 	// Create block manager if needed, then add this block. Both conditions are
 	// invariant violations — the caller (mVUcompile) unconditionally proceeds
@@ -1085,6 +1086,7 @@ static void vuAotSetBlockEntry(void* block, void* entry)
 {
 	microBlock* b = static_cast<microBlock*>(block);
 	b->x86ptrStart = static_cast<u8*>(entry);
+	b->extent = 0; // vu-aot's code; its size is not recorded
 	b->hostEntry = entry;
 }
 
@@ -1124,7 +1126,7 @@ static void vuAotEmitJumpTail(u32 vu, void* block, const u8* endKey)
 	microBlock* blk = static_cast<microBlock*>(block);
 	std::memcpy(&blk->pStateEnd, endKey, sizeof(microRegInfo));
 	if (!blk->jumpCache)
-		blk->jumpCache = new microJumpCache[mProgSize / 2];
+		blk->jumpCache = static_cast<microJumpCache*>(mVUJumpTable::Alloc());
 
 	mVUldrField(mVU, RWARG1, &mVU.branch);
 	if (doJumpCaching)
@@ -1166,10 +1168,10 @@ static void vuAotEmitJumpTail(u32 vu, void* block, const u8* endKey)
 	armAsm->Br(a64::x0);
 }
 
-// vu-aot milestone 8: microVU's own code for a block a region holds (the
-// block manager keeps the region's entry; mVUcompile finds that block and
-// compiles into it without replacing the entry). The record's slot keeps the
-// code for the next bail.
+// microVU's own code for a block a vu-aot region holds. The block manager
+// keeps the region's entry; mVUcompile finds that block and compiles into it
+// without replacing the entry. The record's slot caches the code for the next
+// bail.
 static void* vuAotBailTarget(u32 vu, u8* rec)
 {
 	microVU& mVU = mVUbyIndex(vu);
@@ -1263,6 +1265,15 @@ struct mVUvuAotCompileScope
 	~mVUvuAotCompileScope() { mVUvuAotCompileEnd(mVU); }
 };
 
+// Records how far the block's compile moved the code cursor (microBlock::extent).
+// Compile-time only. Skipped when the block manager kept an older block for this
+// state, or vu-aot pointed the block at code of its own.
+static void mVUrecordExtent(microBlock* block, u8* thisPtr, u32 guestPairs)
+{
+	if (block && block->x86ptrStart == thisPtr)
+		block->extent = mVUBlockExtent::Make(static_cast<size_t>(armGetCurrentCodePointer() - thisPtr), guestPairs);
+}
+
 void* mVUcompile(microVU& mVU, u32 startPC, uptr pState)
 {
 	microFlagCycles mFC;
@@ -1279,6 +1290,9 @@ void* mVUcompile(microVU& mVU, u32 startPC, uptr pState)
 	mVU.regAlloc->reset(false);
 	mVUclearBranchCondCarry(mVU);
 	mVUinitFirstPass(mVU, pState, thisPtr);
+	// mVUpBlock is IR state, and a nested compile (the not-taken path of a
+	// branch) points it at its own block, so keep this one's.
+	microBlock* const compiledBlock = mVUpBlock;
 	mVUbranch = 0;
 
 	for (int branch = 0; mVUcount < endCount;)
@@ -1423,15 +1437,16 @@ void* mVUcompile(microVU& mVU, u32 startPC, uptr pState)
 
 		incPC(1);
 	}
+	const u32 guestPairs = mVUcount;
 
 	mVUregs.vi15 = 0;
 	mVUregs.vi15v = 0;
 	mVUsetFlags(mVU, mFC);
 	mVUoptimizePipeState(mVU);
 	// vu-aot: a test installs its hooks through the vuaot:: globals; otherwise
-	// the live tier hands out its own, for a program it has tiered up (and
-	// for VU1 only). With neither, nothing below runs and microVU compiles the
-	// block exactly as it always has.
+	// the live tier hands out its own, for a program it has tiered up (VU1
+	// only). With neither, nothing below runs and microVU compiles the block
+	// unchanged.
 	vuaot::VuAotRegionHook vuAotRegionHook = vuaot::g_vuAotRegionHook;
 	void* vuAotRegionUser = vuaot::g_vuAotRegionHookUser;
 	vuaot::VuAotBodyHook vuAotBodyHook = vuaot::g_vuAotBodyHook;
@@ -1453,10 +1468,10 @@ void* mVUcompile(microVU& mVU, u32 startPC, uptr pState)
 	if (vuaot::g_mvuBlockHook)
 		vuaot::g_mvuBlockHook(vuAotTrace, vuaot::g_mvuBlockHookUser);
 #endif
-	// vu-aot milestone 4: a hook may compile a whole region rooted at this
-	// block in its place; microVU then emits nothing for it.
+	// vu-aot: a hook may compile a whole region rooted at this block in its
+	// place; microVU then emits nothing for it.
 	if (vuAotRegionHook && !vuAotShadow && vuAotRegionHook(vuAotTrace, mVUbuildEmitEnv(mVU), vuAotRegionUser))
-		return thisPtr;
+		return thisPtr; // the region's code is vu-aot's: extent stays 0
 	{
 		const mVUSpinLoop spin = mVUdetectSpinLoop(mVU, startPC);
 		if (spin.found)
@@ -1471,8 +1486,8 @@ void* mVUcompile(microVU& mVU, u32 startPC, uptr pState)
 	u32 x = 0;
 
 	mVUemitClampConsts(mVU);
-	// vu-aot milestone 2: a hook may emit this block's whole body from vu-aot's
-	// IR; microVU then emits only its framing below.
+	// vu-aot: a hook may emit this block's whole body from vu-aot's IR;
+	// microVU then emits only its framing below.
 	const bool vuAotBody = vuAotBodyHook && !vuAotShadow &&
 		vuAotBodyHook(vuAotTrace, mVUbuildEmitEnv(mVU), vuAotBodyUser);
 	if (!vuAotBody)
@@ -1665,6 +1680,7 @@ void* mVUcompile(microVU& mVU, u32 startPC, uptr pState)
 	mVUendProgram(mVU, &mFC, 1);
 
 perf_and_return:
+	mVUrecordExtent(compiledBlock, thisPtr, guestPairs);
 	// Register the program-entry compile only, not every continuation block
 	// compiled at a mid-program PC (start_pc stays the program entry for
 	// branch-target sub-blocks; it's only re-pointed on the dispatch/indirect-

@@ -254,7 +254,6 @@ bool ImGuiManager::InitializeFullscreenUI()
 
 void ImGuiManager::Shutdown(bool clear_state)
 {
-	// Creates or releases device textures, whose pool the GS back thread also uses.
 	GSDrainBackQueue();
 
 	DestroySoftwareCursorTextures();
@@ -385,7 +384,16 @@ void ImGuiManager::NewFrame()
 		UpdateScale();
 	}
 
+	// NavUpdate() hides the nav cursor on every frame a NoNavInputs window holds focus: the on-screen
+	// keyboard while it is open, or the implicit Debug window when nothing else has focus. That is
+	// not a mouse click, so put the cursor back; otherwise the window that gets focus next has a
+	// selected item but no highlight until the first direction press. Only a cursor that was visible
+	// is restored, so a click (which hides it before this point) still keeps it hidden.
+	ImGuiContext& g = *GImGui;
+	const bool nav_cursor_was_visible = g.NavCursorVisible;
 	ImGui::NewFrame();
+	if (nav_cursor_was_visible && g.NavWindow && (g.NavWindow->Flags & ImGuiWindowFlags_NoNavInputs))
+		g.NavCursorVisible = true;
 
 	// Disable nav input on the implicit (Debug##Default) window. Otherwise we end up requesting keyboard
 	// focus when there's nothing there. We use GetCurrentWindowRead() because otherwise it'll make it visible.
@@ -1511,7 +1519,6 @@ void ImGuiManager::CreateSoftwareCursorTextures()
 
 void ImGuiManager::DestroySoftwareCursorTextures()
 {
-	// Creates or releases device textures, whose pool the GS back thread also uses.
 	GSDrainBackQueue();
 
 	for (u32 i = 0; i < InputManager::MAX_POINTER_DEVICES; i++)
@@ -1522,7 +1529,6 @@ void ImGuiManager::DestroySoftwareCursorTextures()
 
 void ImGuiManager::UpdateSoftwareCursorTexture(u32 index)
 {
-	// Creates or releases device textures, whose pool the GS back thread also uses.
 	GSDrainBackQueue();
 
 	SoftwareCursor& sc = s_software_cursors[index];

@@ -108,6 +108,8 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
     }
     // i18n KEY of the last slot-tap failure, shown in place of silently closing the picker.
     var failure by remember { mutableStateOf<String?>(null) }
+    // The core's reason for a refused load ("Memory size mismatch, ..."), shown under "savestate.error.load".
+    var failureReason by remember { mutableStateOf("") }
     // Import an external save-state file into this game's next free slot. A green success line +
     // a refresh bump so the slot tiles re-probe and show the imported save immediately.
     var notice by remember { mutableStateOf<String?>(null) }
@@ -160,7 +162,7 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
             )
             failure?.let { key ->
                 Text(
-                    str(key),
+                    if (key == "savestate.error.load" && failureReason.isNotEmpty()) "${str(key)}\n$failureReason" else str(key),
                     color = Color(0xFFFFB4A2),
                     fontSize = 13.sp,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -243,7 +245,11 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
                                     runCatching { NativeApp.isMemcardBusy() }.getOrDefault(false)
                                 val hardcore = !ok &&
                                     runCatching { NativeApp.isHardcoreMode() }.getOrDefault(false)
+                                val reason = if (!ok && mode == SaveMode.Load) {
+                                    runCatching { NativeApp.getLastStateLoadError() }.getOrNull().orEmpty().trim()
+                                } else ""
                                 withContext(Dispatchers.Main) {
+                                    failureReason = reason
                                     if (ok) {
                                         failure = null
                                         onBack()
@@ -499,19 +505,20 @@ private fun SlotTile(
 }
 
 @Composable
-private fun TileFrame(
+internal fun TileFrame(
     controllerId: String?,
     borderColor: Color,
     backgroundColor: Color,
     enabled: Boolean = true,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    /** The tile's size. The in-game picker's two-row grid wants a fixed-width tile that fills its
+     *  row; the Save Manager's wrapping grid sizes its tiles from the cell instead. */
+    sizing: Modifier = Modifier.width(TILE_WIDTH_DP.dp).fillMaxHeight(),
     content: @Composable BoxScope.() -> Unit,
 ) {
     Box(
-        Modifier
-            .width(TILE_WIDTH_DP.dp)
-            .fillMaxHeight()
+        sizing
             .controllerFocusable(controllerId, RoundedCornerShape(12.dp), onConfirm = { if (enabled) onClick() })
             .clip(RoundedCornerShape(12.dp))
             .background(backgroundColor)
@@ -526,7 +533,7 @@ private fun TileFrame(
 }
 
 /** Slot timestamp for a tile subtitle, or null when the file gave us nothing usable. */
-private fun formatSlotStamp(stamp: Long): String? =
+internal fun formatSlotStamp(stamp: Long): String? =
     if (stamp <= 0L) null
     else runCatching {
         java.text.SimpleDateFormat("d MMM yyyy, HH:mm", java.util.Locale.getDefault())
@@ -534,7 +541,7 @@ private fun formatSlotStamp(stamp: Long): String? =
     }.getOrNull()
 
 @Composable
-private fun BoxScope.BottomLabel(title: String, subtitle: String?, titleColor: Color) {
+internal fun BoxScope.BottomLabel(title: String, subtitle: String?, titleColor: Color) {
     Box(
         Modifier
             .align(Alignment.BottomStart)

@@ -24,9 +24,8 @@ u64 __noinline CURRENT_ISA::GSXXH3_64_Long(const void* data, size_t len)
 }
 
 // A GS block is XXH3's whole internal buffer, so after any update of a block the buffer holds exactly
-// that block and nothing has consumed it yet. GSXXH3_64_Block() reproduces the state XXH3_update()
-// leaves, without ever filling the buffer: the block is only remembered, and its stripes are
-// consumed from the caller's memory when the next block arrives.
+// that block and nothing has consumed it yet. GSXXH3_64_Block() reproduces that state without
+// filling the buffer (see GSXXH.h).
 static constexpr size_t BlockSize = 256;
 static_assert(BlockSize == XXH3_INTERNALBUFFER_SIZE, "a GS block must be the size of XXH3's internal buffer");
 
@@ -41,6 +40,18 @@ static void FlushPendingBlock(GSXXH3BlockState* h)
 	}
 }
 
+namespace CURRENT_ISA
+{
+	// One GS block's stripes without XXH3_accumulate's prefetch, which only fetches memory past the block.
+	// GSXXH3_64_Block prefetches the next block instead.
+	static void AccumulateBlockStripes(xxh_u64* XXH_RESTRICT acc, const xxh_u8* XXH_RESTRICT input,
+		const xxh_u8* XXH_RESTRICT secret, size_t nbStripes)
+	{
+		for (size_t n = 0; n < nbStripes; n++)
+			XXH3_accumulate_512(acc, input + n * XXH_STRIPE_LEN, secret + n * XXH_SECRET_CONSUME_RATE);
+	}
+} // namespace CURRENT_ISA
+
 void CURRENT_ISA::GSXXH3_64_Block(void* hasher, const void* block)
 {
 	GSXXH3BlockState* h = static_cast<GSXXH3BlockState*>(hasher);
@@ -48,10 +59,15 @@ void CURRENT_ISA::GSXXH3_64_Block(void* hasher, const void* block)
 
 	if (h->pending)
 	{
+#if defined(__GNUC__) || defined(__clang__)
+		// Start fetching the block passed in now; it's the next one hashed.
+		for (size_t i = 0; i < BlockSize; i += 64)
+			__builtin_prefetch(static_cast<const char*>(block) + i);
+#endif
 		// XXH3_update() on a full buffer consumes the buffer and then buffers the new block.
 		const unsigned char* secret = (st->extSecret == nullptr) ? st->customSecret : st->extSecret;
 		XXH3_consumeStripes(st->acc, &st->nbStripesSoFar, st->nbStripesPerBlock,
-			h->pending, BlockSize / XXH_STRIPE_LEN, secret, st->secretLimit, XXH3_accumulate, XXH3_scrambleAcc);
+			h->pending, BlockSize / XXH_STRIPE_LEN, secret, st->secretLimit, AccumulateBlockStripes, XXH3_scrambleAcc);
 	}
 	else if (st->totalLen != 0)
 	{

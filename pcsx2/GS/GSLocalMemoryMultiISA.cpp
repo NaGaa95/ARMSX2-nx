@@ -73,6 +73,9 @@ class CURRENT_ISA::GSLocalMemoryFunctions
 	template <typename T>
 	static void ReadTexture(GSLocalMemory& mem, const GSOffset& off, const GSVector4i& r, u8* dst, int dstpitch, const GIFRegTEXA& TEXA);
 
+	static bool WriteBlocksOfPixel32(GSLocalMemory& mem, u8* src, u32 pitch, const GSOffset& off, const GSVector4i& r, u32 write_mask);
+	static bool WriteBlocksOfPixel16(GSLocalMemory& mem, u8* src, u32 pitch, const GSOffset& off, const GSVector4i& r, u32 write_mask);
+
 public:
 	static void ReadImageX(const GSLocalMemory& mem, int& tx, int& ty, u8* dst, int len, GIFRegBITBLTBUF& BITBLTBUF, GIFRegTRXPOS& TRXPOS, GIFRegTRXREG& TRXREG);
 
@@ -89,6 +92,8 @@ void CURRENT_ISA::GSLocalMemoryPopulateFunctions(GSLocalMemory& mem)
 void GSLocalMemoryFunctions::PopulateFunctions(GSLocalMemory& mem)
 {
 	mem.m_readImageX = ReadImageX;
+	mem.m_writeBlocksOfPixel32 = WriteBlocksOfPixel32;
+	mem.m_writeBlocksOfPixel16 = WriteBlocksOfPixel16;
 
 	for (GSLocalMemory::psm_t& psm : mem.m_psm)
 	{
@@ -453,16 +458,12 @@ void GSLocalMemoryFunctions::WriteImage(GSLocalMemory& mem, int& tx, int& ty, co
 	if (TRXREG.RRW == 0)
 		return;
 
-	// An odd width 4bpp transfer is one stream of nibbles that runs on across rows: the last pixel of a row takes the low
-	// nibble of a byte and the first pixel of the next row takes its high nibble, as on the console. Its rows do not start
-	// on a byte, so none of the code below, which moves whole bytes per row, can write it. WriteImageX walks the nibbles
-	// and keeps the cursor, so a transfer that arrives in pieces carries on from where the last piece stopped.
-	// GT3 demo, Jak 2 Japanese subtitles, and the BG Dark Alliance minimap do this.
-	//
-	// An odd start x is the same case for the same reason: the paths below take pixel x from nibble x & 1 of byte x / 2
-	// from a base they round down to a byte, so for an odd x every pixel would get its left neighbour's nibble, the first
-	// from the byte before the source, and the last nibble would be dropped. The console stores it as the same stream, at
-	// any width, so it goes the same way.
+	// A 4bpp transfer with an odd width or an odd start x is one stream of nibbles that runs on across rows, as on the
+	// console (see writeNibbleStream): the rows do not start on a byte. The paths below move whole bytes per row and
+	// take pixel x from nibble x & 1 of byte x / 2 of a base rounded down to a byte, so for an odd x every pixel would
+	// get its left neighbour's nibble, the first from the byte before the source, and the last nibble would be dropped.
+	// WriteImageX walks the nibbles and keeps the cursor, so a transfer that arrives in pieces carries on from where
+	// the last piece stopped.
 	if (trbpp == 4 && ((TRXREG.RRW | TRXPOS.DSAX) & 0x1))
 	{
 		WriteImageX(mem, tx, ty, src, len, BITBLTBUF, TRXPOS, TRXREG);
@@ -662,8 +663,8 @@ void GSLocalMemoryFunctions::WriteImage4HL(GSLocalMemory& mem, int& tx, int& ty,
 	if (TRXREG.RRW == 0)
 		return;
 
-	// An odd width never takes the aligned path below (a row of it is not a whole number of bytes), and for a width of 1
-	// RRW / 2 is 0, which the length is divided by. Say so up front.
+	// An odd width is not a whole number of bytes per row, so it cannot take the aligned path below, and for a width
+	// of 1 RRW / 2 is 0, which the length is divided by.
 	if (TRXREG.RRW & 1)
 	{
 		WriteImageX(mem, tx, ty, src, len, BITBLTBUF, TRXPOS, TRXREG);
@@ -705,8 +706,7 @@ void GSLocalMemoryFunctions::WriteImage4HH(GSLocalMemory& mem, int& tx, int& ty,
 	if (TRXREG.RRW == 0)
 		return;
 
-	// An odd width never takes the aligned path below (a row of it is not a whole number of bytes), and for a width of 1
-	// RRW / 2 is 0, which the length is divided by. Say so up front.
+	// As in WriteImage4HL: an odd width cannot take the aligned path, and RRW / 2 is 0 for a width of 1.
 	if (TRXREG.RRW & 1)
 	{
 		WriteImageX(mem, tx, ty, src, len, BITBLTBUF, TRXPOS, TRXREG);
@@ -834,7 +834,6 @@ static void writeNibbleStream(int& tx, int& ty, const u8* src, int len, int sx, 
 	if (ty >= ey)
 		return;
 
-	// The nibbles to write: what the bytes hold, or what is left of the rectangle if that is less.
 	int remaining = std::min(len * 2, (ey - ty) * w - (tx - sx));
 	int remX = ex - tx;
 
@@ -990,6 +989,61 @@ void GSLocalMemoryFunctions::WriteImageX(GSLocalMemory& mem, int& tx, int& ty, c
 }
 
 //
+
+// Write the block-aligned interior with block writes and only the edges per pixel. A block's first pixel
+// is its first unit in all the 32/16-bit formats.
+template <int BlockW, int BlockH, typename T, typename BlockFn, typename PixelFn>
+static bool writeBlockAlignedInterior(T* vm, u8* src, u32 pitch, const GSOffset& off, const GSVector4i& r,
+	BlockFn&& write_block, PixelFn&& write_pixel)
+{
+	// Past the row width, rows share memory and the last one written wins; the per-pixel loop keeps raster order.
+	if (r.right > off.pageRowWidth())
+		return false;
+
+	const GSVector4i inner = r.ralign<Align_Inside>(GSVector2i(BlockW, BlockH));
+	if (inner.rempty())
+		return false;
+
+	const int spitch = static_cast<int>(pitch);
+	for (int by = inner.top; by < inner.bottom; by += BlockH)
+	{
+		const u8* const row = src + (by - r.top) * spitch;
+		const GSOffset::PAHelper pa = off.paMulti(0, by);
+		for (int bx = inner.left; bx < inner.right; bx += BlockW)
+			write_block(reinterpret_cast<u8*>(&vm[pa.value(bx)]), row + (bx - r.left) * static_cast<int>(sizeof(T)), spitch);
+	}
+
+	const auto strip = [&](const GSVector4i& e) {
+		if (e.rempty())
+			return;
+		u8* const s = src + (e.top - r.top) * spitch + (e.left - r.left) * static_cast<int>(sizeof(T));
+		off.loopPixels(e, vm, reinterpret_cast<T*>(s), spitch, write_pixel);
+	};
+	strip(GSVector4i(r.left, r.top, r.right, inner.top));
+	strip(GSVector4i(r.left, inner.bottom, r.right, r.bottom));
+	strip(GSVector4i(r.left, inner.top, inner.left, inner.bottom));
+	strip(GSVector4i(inner.right, inner.top, r.right, inner.bottom));
+	return true;
+}
+
+bool GSLocalMemoryFunctions::WriteBlocksOfPixel32(GSLocalMemory& mem, u8* src, u32 pitch, const GSOffset& off, const GSVector4i& r, u32 write_mask)
+{
+	const auto pixel = [write_mask](u32* d, u32* s) { *d = (*d & ~write_mask) | (*s & write_mask); };
+	if (write_mask == 0xffffffffu)
+	{
+		return writeBlockAlignedInterior<8, 8>(mem.vm32(), src, pitch, off, r,
+			[](u8* d, const u8* s, int p) { GSBlock::WriteBlock32<0, 0xffffffff>(d, s, p); }, pixel);
+	}
+	pxAssert(write_mask == 0x00ffffffu);
+	return writeBlockAlignedInterior<8, 8>(mem.vm32(), src, pitch, off, r,
+		[](u8* d, const u8* s, int p) { GSBlock::WriteBlock32<0, 0x00ffffff>(d, s, p); }, pixel);
+}
+
+bool GSLocalMemoryFunctions::WriteBlocksOfPixel16(GSLocalMemory& mem, u8* src, u32 pitch, const GSOffset& off, const GSVector4i& r, u32)
+{
+	return writeBlockAlignedInterior<16, 8>(mem.vm16(), src, pitch, off, r,
+		[](u8* d, const u8* s, int p) { GSBlock::WriteBlock16<0>(d, s, p); }, [](u16* d, u16* s) { *d = *s; });
+}
 
 void GSLocalMemoryFunctions::ReadImageX(const GSLocalMemory& mem, int& tx, int& ty, u8* dst, int len, GIFRegBITBLTBUF& BITBLTBUF, GIFRegTRXPOS& TRXPOS, GIFRegTRXREG& TRXREG)
 {

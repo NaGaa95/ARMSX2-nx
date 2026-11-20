@@ -16,7 +16,7 @@
 //
 // This file includes nothing from the emulator except IopThread.h, which only needs the common
 // threading and floating-point-control headers. It also builds on its own with
-// -fsanitize=thread, which is what checks the memory orderings (see the step 4 record).
+// -fsanitize=thread, which is what checks the memory orderings.
 
 #include <gtest/gtest.h>
 
@@ -42,9 +42,8 @@
 #define IOP_THREAD_TEST_CAN_READ_THREAD_NAME 1
 #endif
 
-// How long a test may run before its watchdog raises `aborted`. A compile-time knob so the "red"
-// run against a stub implementation can use a short one; a normal run finishes in well under a
-// second per test.
+// How long a test may run before its watchdog raises `aborted`. Overridable at compile time; a
+// normal run finishes in well under a second per test.
 #ifndef IOP_THREAD_TEST_LIMIT_MS
 #define IOP_THREAD_TEST_LIMIT_MS 30000
 #endif
@@ -366,11 +365,9 @@ namespace
 			return true;
 		}
 
-		// WaitEe() for the EE thread. A real EE does not publish once and then wait: it comes back to
-		// its event test a few microseconds later and wakes the IOP again if it is parked. The one
-		// wake-up the design accepts losing (iop_parked read just before the IOP sets it) is made up
-		// by that, and a test that published once and polled would hang on it about one run in
-		// twenty, right after Start(). Each poll therefore does what the next event test would.
+		// WaitFor for the EE thread: each poll wakes a parked IOP, as the EE's next event test would.
+		// The one wake-up the protocol accepts losing (iop_parked read just before the IOP sets it) is
+		// made up that way, and a test that published once and only polled could hang on it.
 		// The tests of the recovery itself do not use this.
 		template <class Pred>
 		bool WaitEe(Pred&& pred, std::chrono::milliseconds limit = 10s)
@@ -389,11 +386,10 @@ namespace
 			return WaitEe([&] { return thread->IsParked(); });
 		}
 
-		// The IOP has committed to sleeping: it set iop_parked, looked once more for work, found none
-		// and counted a park (a new one, if `parks_before` is the count from earlier). IsParked() alone
-		// is weaker: the flag is set before that last look, and a thread delayed between the two (a
-		// page fault under a sanitizer, say) can find work the EE published after it saw the flag.
-		// No pokes: tests of lost wake-ups need an IOP that only a wake-up can move.
+		// The IOP has committed to sleeping: it set iop_parked, re-checked for work, found none and
+		// counted a park beyond `parks_before`. IsParked() alone is weaker, since the flag is set before
+		// the re-check and a delayed thread can still find work the EE published after it saw the flag.
+		// Does not wake the IOP: tests of lost wake-ups need one that only a wake-up can move.
 		bool WaitAsleep(u64 parks_before = 0)
 		{
 			return WaitFor([&] { return thread->GetStats().parks > parks_before && thread->IsParked(); });
@@ -403,7 +399,6 @@ namespace
 			return WaitEe([&] { return fake.pos_mirror.load(std::memory_order_acquire) >= pos; });
 		}
 
-		// The EE moves its clock to `cycle` and publishes it, as an event test does.
 		void Publish(u64 cycle)
 		{
 			ee_cycle = cycle;
@@ -421,8 +416,6 @@ namespace
 	class IopThreadObjectLockstep : public IopThreadObject
 	{
 	};
-
-	// ============================================================ start, stop and thread setup
 
 	TEST_F(IopThreadObject, StartAndStopRepeatedlyInBothModes)
 	{
@@ -567,8 +560,6 @@ namespace
 		});
 		EXPECT_TRUE(reached) << "a host command must re-apply the FPCR on the IOP thread";
 	}
-
-	// ============================================================ pacing
 
 	TEST_F(IopThreadObject, TheIopRunsUpToTheWatermarkAndNoFurther)
 	{
@@ -883,8 +874,6 @@ namespace
 		}
 	}
 
-	// ============================================================ holds
-
 	TEST_F(IopThreadObject, AHoldReachesItsTargetWithAConsistentViewAndFreezesTheIop)
 	{
 		fake.block = 32;
@@ -1110,11 +1099,9 @@ namespace
 
 	TEST_F(IopThreadObject, AHoldDoesNotGiveUpWhenTheStopPredicateFires)
 	{
-		// The IOP is in a slice that outlasts many of the spin's stop checks, and for a lifecycle hold long enough to
-		// make it fall back to sleeping. The caller of a hold is in the middle of an operation that needs the IOP
-		// stopped (a SIF pump, the savestate a shutdown writes), so the hold waits for the IOP however long the slice
-		// takes and never asks whether the VM is stopping. The lag wait and the full queue wait are the ones that give
-		// up: their callers can return to the event test.
+		// A hold never gives up when the stop predicate fires, however long the IOP's slice takes: its
+		// caller is mid-operation (a SIF pump, the savestate a shutdown writes) and needs the IOP stopped.
+		// The lag wait and the full queue wait do give up, since their callers can return to the event test.
 		StopOnExit stop_on_exit(*thread);
 		for (const HoldKind kind : {HoldKind::Emulation, HoldKind::Lifecycle})
 		{
@@ -1248,9 +1235,9 @@ namespace
 
 	TEST_F(IopThreadObject, WhatTheIopDidBeforePublishingItsPositionIsVisibleToTheEeThatReadsIt)
 	{
-		// Design 3.9 says nothing depends on this ordering, and PublishedPos() promises it anyway:
-		// it loads with acquire what the IOP stored with release. The only thing that orders the
-		// plain array below is the position; ThreadSanitizer reports a race if the ordering is gone.
+		// Nothing in the protocol depends on this ordering, but PublishedPos() promises it anyway: it
+		// loads with acquire what the IOP stored with release. The only thing that orders the plain
+		// array below is the position; ThreadSanitizer reports a race if the ordering is gone.
 		constexpr u64 kRounds = 4000;
 		std::vector<u64> written(kRounds + 2, 0);
 		fake.block = 64;
@@ -1327,8 +1314,6 @@ namespace
 				found = true;
 		EXPECT_TRUE(found) << "the IOP must continue from the position it was resynchronised to";
 	}
-
-	// ============================================================ CallOnEE
 
 	TEST_F(IopThreadObject, CallOnEEWhileTheEeIsInALagSpinCompletes)
 	{
@@ -1507,13 +1492,11 @@ namespace
 		}
 	}
 
-	// ============================================================ wake-ups
-
 	TEST_F(IopThreadObject, AMissedWakeUpIsRecoveredByTheSpinsEntryWake)
 	{
-		// The narrow race of design 3.9: the EE publishes, reads iop_parked as false just before the
-		// IOP sets it, and the IOP's re-check misses the new watermark. The wake from the publish is
-		// "lost". The fault is injected by dropping that wake.
+		// The narrow race: the EE publishes, reads iop_parked as false just before the IOP sets it,
+		// and the IOP's re-check misses the new watermark, so the publish's wake is "lost". The fault
+		// is injected by dropping that wake.
 		Params p = BaseParams();
 		p.lag = 4096;
 		p.drop_wake = [](WakeSite site) { return site != WakeSite::SpinEntry; }; // only the wake on entering the spin survives
@@ -1680,8 +1663,6 @@ namespace
 		thread->Stop();
 		EXPECT_TRUE(fake.applied.empty()) << "an item queued before the resynchronisation must not be applied after it";
 	}
-
-	// ============================================================ queues
 
 	TEST_F(IopThreadObject, AFullE2IRingMakesTheEeSpinUntilTheIopDrainsIt)
 	{
@@ -1860,6 +1841,209 @@ namespace
 			EXPECT_EQ(received[i], i) << "the IOP-to-EE queue must keep its order";
 	}
 
+	TEST_F(IopThreadObject, AnI2EItemIsStampedWithTheIopsTimeWhenItWasProduced)
+	{
+		// The IOP's clock inside a slice is Params::iop_now. An item takes the time at the post, not the time it gets
+		// into the queue and not the time the EE takes it.
+		std::atomic<u64> clock{0};
+		fake.in_slice_hook = [&, once = false](u64, u64) mutable {
+			if (once)
+				return;
+			once = true;
+			clock.store(0x1'0000'1234ull);
+			thread->PostI2E(I2EKind::SbusIrq, 1);
+			clock.store(0x1'0000'5678ull);
+			thread->PostI2E(I2EKind::SbusIrq, 2);
+		};
+		std::vector<I2EItem> received;
+		Params p = BaseParams();
+		p.iop_now = [&] { return clock.load(); };
+		p.handle_i2e = [&](const I2EItem& item) { received.push_back(item); };
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+		Publish(100);
+		ASSERT_TRUE(WaitPos(100));
+		ASSERT_TRUE(WaitEe([&] {
+			if (thread->MayHaveI2E())
+				thread->DrainI2E();
+			return received.size() == 2;
+		}));
+		EXPECT_EQ(received[0].stamp, 0x1234u) << "the low 32 bits of the IOP's time";
+		EXPECT_EQ(received[1].stamp, 0x5678u);
+		const u64 now = 0x1'0000'9000ull; // the EE takes the item 0x9000 - 0x5678 cycles after it was produced, across the 2^32 wrap
+		EXPECT_EQ(static_cast<s32>(static_cast<u32>(now) - received[1].stamp), 0x9000 - 0x5678);
+	}
+
+	TEST_F(IopThreadObject, AnI2EItemWithNoIopClockIsStampedWithTheSliceStart)
+	{
+		fake.in_slice_hook = [&, once = false](u64 from, u64) mutable {
+			if (once || from == 0)
+				return;
+			once = true;
+			thread->PostI2E(I2EKind::SbusIrq, 9);
+		};
+		std::vector<I2EItem> received;
+		Params p = BaseParams();
+		p.handle_i2e = [&](const I2EItem& item) { received.push_back(item); };
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+		Publish(640);
+		ASSERT_TRUE(WaitPos(640));
+		Publish(1280);
+		ASSERT_TRUE(WaitPos(1280));
+		ASSERT_TRUE(WaitEe([&] {
+			if (thread->MayHaveI2E())
+				thread->DrainI2E();
+			return received.size() == 1;
+		}));
+		EXPECT_EQ(received[0].stamp, 640u) << "no iop_now: the position at the start of the slice that posted";
+	}
+
+	TEST_F(IopThreadObject, AnItemThatWaitedForRoomKeepsTheTimeItWasProduced)
+	{
+		constexpr u32 kItems = static_cast<u32>(kI2EQueueCapacity) + 20;
+		std::atomic<u64> clock{1000};
+		fake.in_slice_hook = [&, once = false](u64, u64) mutable {
+			if (once)
+				return;
+			once = true;
+			for (u32 i = 0; i < kItems; i++)
+			{
+				clock.store(1000 + i);
+				thread->PostI2E(I2EKind::SbusIrq, i);
+			}
+		};
+		std::vector<I2EItem> received;
+		Params p = BaseParams();
+		p.iop_now = [&] { return clock.load(); };
+		p.handle_i2e = [&](const I2EItem& item) { received.push_back(item); };
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+		Publish(100);
+		ASSERT_TRUE(WaitEe([&] { return thread->GetStats().i2e_full_waits >= 1; }));
+		std::this_thread::sleep_for(2ms);
+		ASSERT_TRUE(WaitEe([&] {
+			if (thread->MayHaveI2E())
+				thread->DrainI2E();
+			return received.size() == kItems;
+		}));
+		for (u32 i = 0; i < kItems; i++)
+			ASSERT_EQ(received[i].stamp, 1000u + i) << "item " << i << " (the ones past the capacity waited for room)";
+	}
+
+	TEST_F(IopThreadObject, AnSbusItemTheEeTakesLateInAnIdleEventTestIsCountedAsAnOvershoot)
+	{
+		fake.in_slice_hook = [&, once = false](u64, u64) mutable {
+			if (once)
+				return;
+			once = true;
+			thread->PostI2E(I2EKind::SbusIrq, 1); // produced at IOP time 5000 (iop_now below)
+		};
+		Params p = BaseParams();
+		p.iop_now = [] { return u64(5000); };
+		p.handle_i2e = [](const I2EItem&) {};
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+		Publish(100);
+		ASSERT_TRUE(WaitPos(100));
+		ASSERT_TRUE(WaitEe([&] { return thread->MayHaveI2E(); }));
+
+		// The EE idles from cycle 3000 on, event test after event test, and takes the item at 200,000.
+		thread->NoteEventTest(3000, 0, 1);
+		for (u64 c = 6072; c <= 200000; c += 3072)
+			thread->NoteEventTest(c, FastForward::WaitLoop, 1);
+		ee_cycle = 200000;
+		thread->NoteEventTest(ee_cycle, FastForward::WaitLoop, 1);
+		ASSERT_EQ(thread->DrainI2E(), 1u);
+
+		const Stats st = thread->GetStats();
+		EXPECT_EQ(st.replies, 1u);
+		EXPECT_EQ(st.late_replies, 1u);
+		EXPECT_EQ(st.idle_overshoots, 1u);
+		EXPECT_EQ(st.idle_overshoot_max, 195000u);
+		EXPECT_EQ(st.late_ee_busy, 0u);
+		const ReplyStats& r = thread->Replies().Stats();
+		EXPECT_EQ(r.all[ReplyKind::SbusIrq].count, 1u);
+		EXPECT_EQ(r.overshoot[ReplyKind::SbusIrq].count, 1u);
+		EXPECT_EQ(r.all[ReplyKind::SbusIrq].max, 195000u);
+		EXPECT_EQ(st.ee_ff_wait_loop, 65u);
+	}
+
+	TEST_F(IopThreadObject, TheSameItemTakenInAnEventTestTheEeRanIntoIsLateButBusy)
+	{
+		fake.in_slice_hook = [&, once = false](u64, u64) mutable {
+			if (once)
+				return;
+			once = true;
+			thread->PostI2E(I2EKind::SbusIrq, 1);
+		};
+		Params p = BaseParams();
+		p.iop_now = [] { return u64(5000); };
+		p.handle_i2e = [](const I2EItem&) {};
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+		Publish(100);
+		ASSERT_TRUE(WaitPos(100));
+		ASSERT_TRUE(WaitEe([&] { return thread->MayHaveI2E(); }));
+		for (u64 c = 3000; c < 200000; c += 3072)
+			thread->NoteEventTest(c, FastForward::WaitLoop, 1);
+		ee_cycle = 200000;
+		thread->NoteEventTest(ee_cycle, 0, 1); // the EE ran into this one
+		ASSERT_EQ(thread->DrainI2E(), 1u);
+		const Stats st = thread->GetStats();
+		EXPECT_EQ(st.late_replies, 1u);
+		EXPECT_EQ(st.idle_overshoots, 0u);
+		EXPECT_EQ(st.late_ee_busy, 1u);
+	}
+
+	TEST_F(IopThreadObject, ACallOnEeIsAReplyStampedWithTheIopsTimeOfTheRequest)
+	{
+		std::atomic<bool> called{false};
+		fake.in_slice_hook = [&, once = false](u64, u64) mutable {
+			if (once)
+				return;
+			once = true;
+			thread->CallOnEE([&] { called.store(true); });
+		};
+		Params p = BaseParams();
+		p.iop_now = [] { return u64(7000); };
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+		Publish(100);
+		thread->NoteEventTest(4000, 0, 1);
+		for (u64 c = 7072; c < 300000; c += 3072)
+			thread->NoteEventTest(c, FastForward::WaitLoop, 1);
+		ee_cycle = 300000;
+		thread->NoteEventTest(ee_cycle, FastForward::WaitLoop, 1);
+		ASSERT_TRUE(WaitEe([&] {
+			if (thread->MayHaveI2E())
+				thread->DrainI2E();
+			return called.load();
+		}));
+		const ReplyStats& r = thread->Replies().Stats();
+		EXPECT_EQ(r.all[ReplyKind::Call].count, 1u);
+		EXPECT_EQ(r.all[ReplyKind::Call].max, 293000u);
+		EXPECT_EQ(r.idle_overshoots, 1u);
+		EXPECT_EQ(r.overshoot[ReplyKind::Call].count, 1u);
+	}
+
+	TEST_F(IopThreadObjectLockstep, ADirectEffectOfALockstepIopIsCountedLikeAnItem)
+	{
+		Params p = BaseParams(IopThreadMode::Lockstep);
+		p.iop_now = [] { return u64(9000); };
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+		thread->NoteEventTest(5000, 0, 1);
+		for (u64 c = 8072; c <= 150000; c += 3072)
+			thread->NoteEventTest(c, FastForward::WaitLoop, 1);
+		ee_cycle = 150000;
+		thread->NoteEventTest(ee_cycle, FastForward::WaitLoop, 1);
+		const ReplyMonitor::Verdict v = thread->NoteReply(ReplyKind::Sif0Pump, static_cast<u32>(9000));
+		EXPECT_EQ(v.late, 141000u);
+		EXPECT_TRUE(v.overshoot);
+		EXPECT_EQ(thread->Replies().Stats().overshoot[ReplyKind::Sif0Pump].count, 1u);
+	}
+
 	TEST_F(IopThreadObject, ShutdownWhileTheIopWaitsForI2ESpaceCompletes)
 	{
 		bool all_posted = true;
@@ -1900,8 +2084,6 @@ namespace
 			EXPECT_EQ(received, kItems) << "the hold spin must have emptied the queue the IOP was blocked on";
 		}
 	}
-
-	// ============================================================ the spin loops
 
 	TEST_F(IopThreadObject, TheLagSpinChecksTheStopPredicateEvery1024Iterations)
 	{
@@ -1966,8 +2148,6 @@ namespace
 		for (u32 i = 0; i < kItems; i++)
 			EXPECT_EQ(order[i], i);
 	}
-
-	// ============================================================ Lockstep
 
 	TEST_F(IopThreadObjectLockstep, HandoffsRunInOrderOnTheIopThreadAndCompleteBeforeReturning)
 	{
@@ -2145,8 +2325,6 @@ namespace
 		}
 	}
 
-	// ============================================================ everything at once
-
 	TEST_F(IopThreadObject, EverythingTogetherKeepsItsInvariants)
 	{
 		// Random EE operations against a fake IOP that stalls, calls the EE, posts to it and takes
@@ -2267,11 +2445,9 @@ namespace
 			ASSERT_EQ(fake.applied[i].item.arg, i);
 	}
 
-	// ---------------------------------------------------------------- step 11: counters, the hold hook, the spin knob
-
 	TEST_F(IopThreadObject, AWaitThatFindsTheIopParkedIsCountedWithItsStallTime)
 	{
-		// The accepted lost wake-up (design 3.9) made visible: the EE publishes, reads iop_parked as false, and the IOP sleeps
+		// The accepted lost wake-up made visible: the EE publishes, reads iop_parked as false, and the IOP sleeps
 		// with budget pending. The next wait the EE has finds it parked, and says so.
 		Params p = BaseParams();
 		p.lag = 4096;
@@ -2513,13 +2689,11 @@ namespace
 		EXPECT_EQ(thread->GetStats().sif_ee_pumps, 2u);
 	}
 
-	// ============================================================ the idle wait and the sleep handshake
-
 	TEST_F(IopThreadObject, AnIdleIopSeesEachPublishWithoutAWakeUp)
 	{
 		// The idle IOP watches the watermark itself for idle_spin_ns before it sleeps, and says it is
-		// sleeping only then. While it watches, a publish is a plain store: the EE sends no wake-up, which
-		// is the read-modify-write on the semaphore word the step 12 profile found on every event test.
+		// sleeping only then. While it watches, a publish is a plain store: the EE sends no wake-up, so
+		// there is no read-modify-write on the semaphore word on every event test.
 		Params p = BaseParams();
 		p.idle_spin_ns = 2'000'000'000; // longer than the test: it never sleeps
 		StopOnExit stop_on_exit(*thread);
@@ -2559,18 +2733,13 @@ namespace
 	// EE's store and the IOP's announcement land close together in most rounds. Run with each barrier: the
 	// default (membarrier where the kernel has it) and the plain fence on both sides.
 	//
-	// How long the run goes on is set by what it has covered, not by a round count. The test only means
-	// something once the IOP has gone to sleep many times, and how often it does depends on the machine:
-	// under load the IOP's membarrier call takes longer, more publishes arrive while it is inside, the IOP
-	// then finds work and does not sleep. With 200,000 rounds fixed, a loaded machine (load average 22 to 28)
-	// gave 7,500 to 9,300 sleeps in 4 repeats of 40, and six copies of the test running at once as low as
-	// 1,100, against 20,000 to 190,000 on a quiet one; no wake-up was lost in any of them. So the run goes
-	// on past kHammerMinRounds until the IOP has slept kHammerTargetSleeps times, up to a wall-clock budget
-	// (under the fixture's watchdog, which would turn a long run into a failure of its own). Losing a
-	// wake-up fails the test at any load. Reaching the budget with fewer than kHammerFloorSleeps sleeps
-	// fails it too (a run that covered almost nothing proves nothing); between the floor and the target it
-	// passes and says so. The worst load seen so far, six copies of the test at once, slept once in 330
-	// rounds, 3 million rounds in 30 s.
+	// The run is sized by what it has covered, not by a round count. The test only means something once
+	// the IOP has gone to sleep many times, and under load that happens less often: the IOP's membarrier
+	// call takes longer, more publishes arrive while it is inside, and the IOP then finds work instead of
+	// sleeping. So the run goes on past kHammerMinRounds until the IOP has slept kHammerTargetSleeps times,
+	// up to a wall-clock budget under the fixture's watchdog. Losing a wake-up fails the test at any load.
+	// Reaching the budget with fewer than kHammerFloorSleeps sleeps fails it too, since a run that covered
+	// almost nothing proves nothing; between the floor and the target it passes and says so.
 	constexpr u32 kHammerMinRounds = 200000;
 	constexpr u64 kHammerTargetSleeps = kHammerMinRounds / 20;
 	constexpr u64 kHammerFloorSleeps = kHammerTargetSleeps / 10;
@@ -2699,5 +2868,163 @@ namespace
 		EXPECT_EQ(stats.lag_spins, 1u);
 		EXPECT_EQ(stats.lag_spins_parked, 0u) << "the IOP was awake, watching the watermark";
 		EXPECT_EQ(stats.lag_spins_idle, 1u);
+	}
+	// ---- the lag rules (IopLagRules.h) at the thread object
+
+	// A Lockstep skew of a frame keeps the IOP a frame behind. With the idle-outstanding rule, an idle event test after the EE sent a
+	// request brings the IOP to within the tight bound, and a reply from the IOP lets the skew grow back.
+	TEST_F(IopThreadObjectLockstep, AnIdleEventTestWithARequestOutAndASkewKeepsTheIopWithinTheTightBound)
+	{
+		constexpr s64 kSkew = 400000;
+		constexpr s32 kTightBound = 8192;
+		Params p = BaseParams(IopThreadMode::Lockstep);
+		p.lockstep_skew = kSkew;
+		p.rules.mask = LagRule::Bit(LagRule::IdleOutstanding);
+		p.rules.tight = kTightBound;
+		p.rules.outstanding_max_age = 10'000'000;
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+
+		u64 cycle = 0;
+		const auto event_test = [&](bool idle) {
+			cycle += 3072;
+			ee_cycle = cycle;
+			thread->NoteEventTest(cycle, idle ? FastForward::WaitLoop : 0, 100);
+			return thread->LockstepRunSlice(cycle);
+		};
+
+		// No request out: the IOP stays a skew behind, idle or not.
+		for (int i = 0; i < 200; i++)
+			event_test(i % 2 == 0);
+		s64 behind = static_cast<s64>(cycle - thread->PublishedPos());
+		EXPECT_GE(behind, kSkew - fake.block);
+		EXPECT_EQ(thread->LockstepSkewCurrent(), kSkew);
+
+		// A request goes out. A busy event test keeps the skew; the first idle one brings the IOP up to the tight bound.
+		thread->NoteEeSifStart(cycle, 1);
+		event_test(false);
+		EXPECT_GE(static_cast<s64>(cycle - thread->PublishedPos()), kSkew - fake.block);
+		event_test(true);
+		behind = static_cast<s64>(cycle - thread->PublishedPos());
+		EXPECT_LE(behind, kTightBound);
+		EXPECT_GE(behind, kTightBound - fake.block);
+		EXPECT_EQ(thread->LockstepSkewCurrent(), kTightBound);
+
+		// The reply arrives: the next idle event test is loose again, and the skew grows back as the EE runs on.
+		thread->NoteIopSif0Reply(cycle);
+		for (int i = 0; i < 200; i++)
+			event_test(true);
+		EXPECT_EQ(thread->LockstepSkewCurrent(), kSkew);
+		behind = static_cast<s64>(cycle - thread->PublishedPos());
+		EXPECT_GE(behind, kSkew - fake.block);
+		EXPECT_LE(behind, kSkew);
+		EXPECT_EQ(thread->Rules().Stats().activations[LagRule::IdleOutstanding], 1u);
+	}
+
+	TEST_F(IopThreadObjectLockstep, WithNoRuleOnARequestChangesNothingUnderASkew)
+	{
+		constexpr s64 kSkew = 400000;
+		Params p = BaseParams(IopThreadMode::Lockstep);
+		p.lockstep_skew = kSkew;
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+		u64 cycle = 0;
+		for (int i = 0; i < 300; i++)
+		{
+			cycle += 3072;
+			ee_cycle = cycle;
+			if (i == 150)
+				thread->NoteEeSifStart(cycle, 1);
+			thread->NoteEventTest(cycle, FastForward::WaitLoop, 100);
+			thread->LockstepRunSlice(cycle);
+			EXPECT_EQ(thread->LockstepSkewCurrent(), kSkew);
+		}
+		const s64 behind = static_cast<s64>(cycle - thread->PublishedPos());
+		EXPECT_GE(behind, kSkew - fake.block);
+		EXPECT_LE(behind, kSkew);
+	}
+
+	// Threaded: the lag bound is a frame, the IOP is slow, and the EE has a request out and is idle. It may not run past the tight bound.
+	TEST_F(IopThreadObject, AnIdleEeWithARequestOutWaitsForTheIopWithinTheTightBoundAndABusyEeDoesNot)
+	{
+		constexpr s32 kLoose = 4915200;
+		constexpr s32 kTightBound = 8192;
+		Params p = BaseParams();
+		p.lag = kLoose;
+		p.rules.mask = LagRule::Bit(LagRule::IdleOutstanding);
+		p.rules.tight = kTightBound;
+		p.rules.outstanding_max_age = 100'000'000;
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+
+		// The IOP does not move until the EE is far ahead and a request is out: a gate in the first slice.
+		std::atomic<bool> release{false};
+		fake.in_slice_hook = [&](u64, u64) {
+			while (!release.load(std::memory_order_acquire) && !aborted.load(std::memory_order_relaxed))
+				std::this_thread::sleep_for(50us);
+		};
+		u64 cycle = 1'000'000;
+		Publish(cycle);
+		EXPECT_TRUE(thread->CheckLag(cycle)); // a busy EE a long way ahead: the loose bound
+		thread->NoteEventTest(cycle, 0, 100);
+		EXPECT_TRUE(thread->CheckLag(cycle));
+		EXPECT_EQ(thread->GetStats().lag_spins, 0u);
+
+		thread->NoteEeSifStart(cycle, 1);
+		cycle += 3072;
+		Publish(cycle);
+		thread->NoteEventTest(cycle, FastForward::WaitLoop, 100);
+		std::thread releaser([&] {
+			std::this_thread::sleep_for(20ms);
+			release.store(true, std::memory_order_release);
+		});
+		const auto begin = Clock::now();
+		EXPECT_TRUE(thread->CheckLag(cycle));
+		releaser.join();
+		EXPECT_GE(Clock::now() - begin, 15ms) << "the idle EE waited for the slow IOP";
+		EXPECT_LE(static_cast<s64>(cycle - thread->PublishedPos()), kTightBound);
+		EXPECT_EQ(thread->GetStats().lag_spins, 1u);
+	}
+	// SPU2 auto-DMA running on the IOP (the streams word the IOP thread samples at the end of each slice) holds a skewed IOP within the
+	// tight bound whatever the EE is doing, and lets the skew grow back when it stops.
+	TEST_F(IopThreadObjectLockstep, AnAutoDmaStreamKeepsASkewedIopWithinTheTightBoundUntilItStops)
+	{
+		constexpr s64 kSkew = 400000;
+		constexpr s32 kTightBound = 8192;
+		std::atomic<u32> streams{0};
+		Params p = BaseParams(IopThreadMode::Lockstep);
+		p.lockstep_skew = kSkew;
+		p.rules.mask = LagRule::Bit(LagRule::Stream);
+		p.rules.tight = kTightBound;
+		p.rules.stream_bits = StreamBit::SpuAdmaCore0;
+		p.sample_streams = [&](u64) { return streams.load(); };
+		StopOnExit stop_on_exit(*thread);
+		ASSERT_TRUE(thread->Start(p));
+
+		u64 cycle = 0;
+		const auto event_test = [&] {
+			cycle += 3072;
+			ee_cycle = cycle;
+			thread->NoteEventTest(cycle, 0, 100); // a busy EE
+			thread->LockstepRunSlice(cycle);
+		};
+		for (int i = 0; i < 200; i++)
+			event_test();
+		EXPECT_GE(static_cast<s64>(cycle - thread->PublishedPos()), kSkew - fake.block);
+
+		// The stream starts: the IOP sees it at the end of its next slice, the EE at the event test after that.
+		streams.store(StreamBit::SpuAdmaCore0);
+		event_test();
+		event_test();
+		const s64 behind = static_cast<s64>(cycle - thread->PublishedPos());
+		EXPECT_LE(behind, kTightBound);
+		EXPECT_EQ(thread->LockstepSkewCurrent(), kTightBound);
+
+		// A disc read is not in the stream bits.
+		streams.store(StreamBit::CdvdBusy);
+		for (int i = 0; i < 200; i++)
+			event_test();
+		EXPECT_EQ(thread->LockstepSkewCurrent(), kSkew);
+		EXPECT_GE(static_cast<s64>(cycle - thread->PublishedPos()), kSkew - fake.block);
 	}
 } // namespace

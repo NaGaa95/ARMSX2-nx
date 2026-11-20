@@ -44,9 +44,10 @@ import kotlinx.coroutines.withContext
 
 /**
  * Vulkan custom-driver manager: pick the system driver or an installed one, download
- * fresh builds from the bundled sources (ARMSX2 / K11MCH1 / MrPurple / StevenMXZ / crueter;
- * the ARMSX2 MaliSX2 packs only on Mali Valhall v9 and v11: G57/G68/G77/G78, G615/G715),
- * import a local .zip, or delete an installed driver. Self-contained (plain Material3)
+ * fresh builds from the bundled sources, import a local .zip, or delete an installed driver.
+ * The download list is filtered to the device's GPU family ([CustomDriver.fetchRemote]): Turnip
+ * and Adreno Tools packs on Adreno, the MaliSX2 packs on the Mali parts they support, the Exynos
+ * packs on Xclipse. Self-contained (plain Material3)
  * so it drops into both the full Settings renderer tab and the in-game renderer pane.
  * Selecting a driver only takes effect on the next renderer init — the caller shows an
  * "Apply & Restart" affordance.
@@ -90,8 +91,9 @@ fun DriverManagerSection() {
         SectionTitle(str("backend.gpuDriver.label"), str("backend.gpuDriver.description"))
 
         // Eden-style hint: the detected GPU and the best custom-driver source for it. Adreno
-        // maps to a tuned Turnip pack; other vendors (Mali/Xclipse/PowerVR) run the built-in
-        // system driver best. Probes the system GL_RENDERER once (cached).
+        // maps to a tuned Turnip pack, a supported Mali to our MaliSX2; other GPUs (Xclipse,
+        // PowerVR, an unsupported Mali) run the built-in system driver best. Probes the system
+        // GL_RENDERER once (cached).
         val gpuModel = remember { com.armsx2.GpuInfo.rendererName() }
         val gpuRec = remember(gpuModel) { com.armsx2.GpuInfo.recommendation(gpuModel) }
         Surface(
@@ -118,6 +120,38 @@ fun DriverManagerSection() {
         val globalDriverId = remember(InGameOverlay.settingsState.value) { com.armsx2.config.ConfigStore.loadGlobal().output.customDriverId }
         val effectiveId = CustomDriver.effectiveId(
             InGameOverlay.settingsState.value.output.customDriverId, globalDriverId, installed.map { it.id })
+        // malisx2 is installed and this GPU is one it drives, but the scope runs another driver. The
+        // OSD notice at game start is a toast with no button and sends the user here, so this is
+        // where the one-tap switch lives.
+        CustomDriver.maliSX2SwitchOffer(gpuModel, installed, effectiveId)?.let { pack ->
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(13.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        str("backend.driver.maliSx2NotSelected").format(CustomDriver.maliSX2Label(pack)),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(
+                        onClick = { selectDriver(pack.id) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.controllerFocusable(
+                            "driver.switchMaliSX2",
+                            RoundedCornerShape(12.dp),
+                            onConfirm = { selectDriver(pack.id) },
+                        ),
+                    ) { Text(str("backend.driver.maliSx2Switch")) }
+                }
+            }
+        }
         DriverRow(
             controllerId = "driver.system",
             title = str("backend.driver.systemVulkan"),
@@ -201,7 +235,7 @@ fun DriverManagerSection() {
                             drivers.forEach { rd ->
                                 RemoteDriverRow(
                                     controllerId = "driver.remote.${rd.id}",
-                                    title = rd.releaseName.ifBlank { rd.assetName },
+                                    title = rd.title.ifBlank { rd.assetName },
                                     subtitle = listOf(rd.source, rd.tagName).filter(String::isNotBlank).joinToString(" · "),
                                     busy = busyId == rd.id,
                                     onDownload = {

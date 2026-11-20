@@ -6,12 +6,11 @@
 // local memory, unswizzled to RGBA8, and the target's alpha range follows the alpha bytes of the
 // rectangles that were read.
 //
-// Update used to unswizzle straight into a mapped upload buffer and now unswizzles into a scratch
-// buffer and uploads from there. The test does not care which: its textures take a mapping or an
-// Update() call, and what it checks is the texels the update texture holds when it is copied into
-// the target. A rectangle the dirty list names must arrive complete and at the right place, a
-// rectangle that is not block aligned must still read its whole blocks for the alpha range, and a
-// colour format that has no alpha must not be scanned for it.
+// The test does not care how the texels get there (its textures take a mapping or an Update() call);
+// it checks the texels the update texture holds when it is copied into the target. A rectangle the
+// dirty list names must arrive complete and at the right place, a rectangle that is not block aligned
+// must still read its whole blocks for the alpha range, and a colour format that has no alpha must not
+// be scanned for it.
 
 #include "gs_hw_draw_harness.h"
 
@@ -227,7 +226,7 @@ namespace
 		{
 			RGBAMask mask = {};
 			mask._u32 = alpha ? 0xf : 0x7;
-			t->m_dirty.push_back(GSDirtyRect(rect, t->m_TEX0.PSM, t->m_TEX0.TBW, mask, false));
+			t->m_dirty.Mark(GSDirtyRect(rect, t->m_TEX0.PSM, t->m_TEX0.TBW, mask, false), t->m_TEX0.PSM, t->m_TEX0.TBW);
 		}
 
 		/// Every texel the update texture carried for `rects` is the picture's pixel at that place.
@@ -509,8 +508,8 @@ namespace
 					written_words.insert(source.pa(x, y));
 				}
 
-			// Exercise the cache adapter, then the actual unswizzle/upload path.
-			g_texture_cache->DirtyRectByPage(source_bp, PSMCT32, source_bw, target, write);
+			// The write as the renderer reports it, then the actual unswizzle/upload path.
+			g_texture_cache->InvalidateVideoMem(g_gs_renderer->m_mem.GetOffset(source_bp, source_bw, PSMCT32), write);
 			ASSERT_FALSE(target->m_dirty.empty());
 			auto& device = *static_cast<RecordingDevice*>(m_device);
 			device.m_uploads.clear();

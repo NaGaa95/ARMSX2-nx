@@ -65,6 +65,10 @@ public:
 	virtual void ShowMessage(const std::string& text) = 0;
 	virtual void Log(const std::string& text) = 0;
 	virtual void NotifyCommitted(const char* section, const char* key, const std::string& value) = 0;
+
+	/// Puts the display scale (AutoTuneLever::DisplayScale) in effect for now, without saving it; -1 hands the
+	/// output surface back to the saved setting. A host with no such setting never gets asked.
+	virtual void SetDisplayScale(int value) { (void)value; }
 };
 
 class AutoTuneApplier
@@ -82,7 +86,6 @@ public:
 	/// The session is over: drops any trial without applying anything.
 	void End();
 
-	/// Carries out one action from the controller.
 	void Execute(const AutoTuneAction& action);
 
 	/// Takes back the trial in flight, if any, without remembering it as a failure. With `apply` the settings
@@ -102,25 +105,56 @@ private:
 	MemorySettingsInterface m_trial_layer;
 	std::vector<AutoTuneRejection> m_rejected;
 
+	void ReleaseDisplayScale();
+
 	bool m_trial_active = false;
 	AutoTuneLever m_trial_lever = AutoTuneLever::Count;
 	double m_trial_value = 0.0;
+	// The display scale is a host setting, not a key in the trial layer, so the host has to be handed the surface
+	// back when the trial ends. True from the moment the host was given a value until it was handed back; a saved
+	// keep leaves it true, because the host ends its own override then and End() only makes sure it did.
+	bool m_display_scale_held = false;
+	// A display scale that was kept but could not be saved (no settings file for the game): it holds for this
+	// session only, and a later trial that is undone goes back to it rather than to the saved setting.
+	std::optional<int> m_display_scale_session;
 	// What the trial layer held under the trial's key before the trial, so a revert puts it back.
 	std::optional<std::string> m_trial_previous;
 };
 
 namespace AutoTune
 {
+	/// The output surface of a host that can make it smaller than the screen: the Android app's "Display Resolution
+	/// (HW scaler)", which lives in the app and not in the settings files. Auto-tune offers the display scale lever
+	/// (AutoTuneLever::DisplayScale) only when a host has registered this, once at start-up, before any VM exists;
+	/// null on every other frontend.
+	struct DisplayScaler
+	{
+		/// The setting in effect now, a trial included: 0 = the surface is the size of the screen, N = its short
+		/// side is held to 448 * N. Cheap and callable from the CPU thread; read once per half second.
+		int (*get)();
+		/// The short side of the surface before the setting shrinks it, in pixels; 0 when not known yet.
+		int (*base_short_side)();
+		/// Puts `value` in effect for now without saving it, and -1 hands the surface back to the saved setting.
+		/// Returns at once (CPU thread) and `get` answers with `value` from then on, though the surface itself
+		/// may take a moment to follow.
+		///
+		/// A trial that is kept and saved is not ended by a set(-1): the host is told through g_on_committed
+		/// (the key is KeyForLever(AutoTuneLever::DisplayScale)), and ends the override itself once it holds the
+		/// saved value, so the surface does not step back to the old size in between.
+		void (*set)(int value);
+	};
+	extern const DisplayScaler* g_display_scaler;
+
 	/// Set by a host that keeps its own copy of the per-game settings; null (nothing to tell) otherwise. Auto-tune
 	/// calls it when it has moved one setting into the game's own settings file (section and key as in the file,
 	/// value as text), on the CPU thread. The Android app regenerates that file from its own store and drops what
 	/// it does not know, so it writes the key back to its store here. Set once at start-up, before any VM exists.
 	extern void (*g_on_committed)(const char* section, const char* key, std::string_view value);
 
-	/// True while auto-tune is applying settings itself: a trial, an undo, a keep, a reset. Applying settings
-	/// shows the game database's hints on screen again (a recommended blending level, AA1) and the unsafe
-	/// settings warning, and a convergence is six to nine applies in a row, so those stay quiet then. A settings
-	/// change by the player is not auto-tune's and still shows them. CPU thread.
+	/// True while auto-tune is applying settings itself (a trial, an undo, a keep, a reset). Each apply would
+	/// show the game database's hints (a recommended blending level, AA1) and the unsafe settings warning
+	/// again, and a convergence is several applies in a row, so those stay quiet. A settings change by the
+	/// player still shows them. CPU thread.
 	bool IsApplyingSettings();
 
 	/// Marks the settings applies made while it is alive as auto-tune's own. Nests.
@@ -132,8 +166,6 @@ namespace AutoTune
 		ApplyScope(const ApplyScope&) = delete;
 		ApplyScope& operator=(const ApplyScope&) = delete;
 	};
-
-	// ---- decisions that depend on the host and the game database, as pure functions ------------------
 
 	/// Settings the game database fixes for this game, in the terms the controller uses.
 	struct GameDbForced
@@ -148,8 +180,7 @@ namespace AutoTune
 	/// Whether the GS back thread is worth offering as a lever: the setting would be granted for this renderer
 	/// and download mode (GSDecideBackThread), and the thread would not have to share a processor with another busy
 	/// emu thread (`would_share_busy_core`, VMManager::Internal::GSBackThreadWouldShareBusyCore). On a host with
-	/// four performance cores and the IOP thread on, the back thread lands on one of them and costs the speed:
-	/// 66.6% without it, 53.7% with it (MQ65).
+	/// four performance cores and the IOP thread on, the back thread lands on one of them and costs speed.
 	bool GsBackThreadOffered(const GSBackThreadInputs& inputs, bool would_share_busy_core);
 
 	/// What the setting would be granted for: the renderer kind, the API of the device that is open (not the
@@ -157,19 +188,21 @@ namespace AutoTune
 	GSBackThreadInputs BackThreadInputs(bool hardware_renderer, RenderAPI live_api, GSHardwareDownloadMode download_mode);
 
 	/// Whether IopThread::ResolveMode would give an IOP thread a place on this host. The GS back thread, when it
-	/// is running, takes one of the performance cores and one of the cores overall, so it is counted as busy:
-	/// an IOP thread on a host that has room for it only without the back thread would not be placed.
+	/// is running, takes one of the cores overall, so it is counted as busy: an IOP thread on a host that has
+	/// room for it only without the back thread would not be placed. A performance tier narrower than the
+	/// threads does not rule it out (the IOP thread runs outside the tier); a tier of fewer than
+	/// IopThread::kMinPerformanceCores, or one that cannot be read, does.
 	bool IopThreadPlaceable(bool vu_thread, bool lockstep, IopThread::HostCpuInfo host, const IopThread::VmConditions& vm,
 		bool gs_back_thread_running);
 
 	/// The live EE cycle-rate governor as a lever. Both read the governor's own resolver (EECycleRate::GetGovernorStatus),
 	/// so auto-tune and the governor cannot disagree about whether it runs. CPU thread.
 	///
-	/// Available: the governor would run in this game if asked, and a trial of it would change something. Nothing
-	/// is suspending it (hardcore mode, a cycle skip, a limiter that is not at normal speed, host-vsync pacing),
-	/// the player's rate has room to be lowered (the floor is under it), and the global switch is not already on
-	/// but held off by a pinned rate: a trial writes the same "on" the switch already says, the configuration
-	/// would not change, the caches would not reset and the sampler would never be told to start.
+	/// Available: the governor would run in this game if asked, and a trial of it would change something. That
+	/// needs nothing suspending it (hardcore mode, a cycle skip, a limiter off normal speed, host-vsync
+	/// pacing) and room to lower the player's rate (the floor is under it). It also excludes a global switch
+	/// that is already on but held off by a pinned rate: the trial would write the same "on", leave the
+	/// configuration unchanged, and the sampler would never be told to start.
 	/// Enabled: the governor is asked for in this game and nothing pins the rate.
 	bool GovernorAvailableFrom(const EECycleRate::GovernorStatus& status, bool dynamic_setting);
 	bool EeGovernorAvailable();
@@ -177,33 +210,28 @@ namespace AutoTune
 
 	/// Whether a finished trial says anything about its lever. Only the governor can fail to be tried: it acts
 	/// by lowering the EE rate, and if it never did during the trial the game was measured with a governor that
-	/// had not touched it (the game was not overloaded by its own tests, or it had not yet warmed up). That is
-	/// not "did not help", and the per-game file remembers "did not help" for good.
+	/// had not touched it (the game was not overloaded, or had not yet warmed up). That is not "did not help",
+	/// which the per-game file remembers for good; a later session may find the game overloaded.
 	bool TrialWasMeasured(AutoTuneLever lever, uint32_t governor_transitions_at_start, uint32_t governor_transitions_now);
 
-	// ---- what VMManager calls (CPU thread) ----------------------------------------------------------
-
-	/// The VM has finished booting.
+	// What VMManager calls, on the CPU thread.
 	void OnVMStarted();
 	/// The VM is shutting down: the trial layer is emptied and removed.
 	void OnVMShutdown();
-	/// The disc, ELF or game changed.
 	void OnGameChanged();
 	/// A savestate was loaded or the VM was reset: the scene is not the one being measured.
 	void OnSceneChanged();
-	/// The VM came back from a pause.
 	void OnResumed();
 	/// VMManager::ApplySettings() finished. Applies auto-tune did itself are told apart from the rest.
 	void OnSettingsApplied();
 	/// Once per frame, at vsync start.
 	void OnVSync();
 
-	// ---- the per-game record (any thread, no VM needed) -----------------------------------------------
+	// The per-game record: any thread, no VM needed.
 
 	/// Puts back what auto-tune changed in this game's settings file (except keys the player has changed since)
 	/// and forgets what it learned. When the game is the one running, the change is applied on the CPU thread.
 	ResetResult ResetForGame(const std::string& serial, u32 crc);
 
-	/// What auto-tune changed for this game, one readable line each.
 	std::vector<std::string> DescribeForGame(const std::string& serial, u32 crc);
 } // namespace AutoTune

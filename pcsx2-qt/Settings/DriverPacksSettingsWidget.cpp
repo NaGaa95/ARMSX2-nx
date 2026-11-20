@@ -106,7 +106,6 @@ void DriverPacksSettingsWidget::init()
 
 	const DriverPacks::Availability availability = m_manager->GetAvailability();
 	m_available = availability.IsAvailable();
-	// Without an Adreno the page is listed only for a pack that is installed or selected, to undo the choice or delete the pack.
 	m_manageable = m_available || !DriverPacks::GetSelectedPack().empty() || !m_manager->ListInstalled().empty();
 	if (!m_available)
 	{
@@ -115,7 +114,8 @@ void DriverPacksSettingsWidget::init()
 		m_ui.availabilityLabel->setText(
 			availability.reason == DriverPacks::Availability::Reason::UnsupportedPlatform ?
 				tr("Driver packs are not available on this platform.") :
-				tr("No driver packs for this GPU. Driver packs are Turnip builds of the Vulkan driver for Qualcomm Adreno GPUs, and this device has none."));
+				tr("No driver packs for this GPU. Driver packs are Turnip builds of the Vulkan driver for Qualcomm Adreno GPUs and malisx2 builds for Arm Mali GPUs "
+				   "that run Arm's kernel driver (kbase), and this device has neither."));
 		m_ui.availableGroup->setVisible(false);
 		if (!m_manageable)
 			return;
@@ -156,8 +156,6 @@ void DriverPacksSettingsWidget::showEvent(QShowEvent* event)
 			loadAvailable(false);
 	}
 }
-
-// ---- What is in use, and what is installed ----------------------------------------------------------------
 
 bool DriverPacksSettingsWidget::sessionIsX11() const
 {
@@ -239,7 +237,12 @@ void DriverPacksSettingsWidget::refreshCurrent()
 
 		case DriverPacks::ApplyOutcome::GpuNotSupported:
 			text = tr("Using the system Vulkan driver.");
-			note = tr("The driver pack %1 is selected, but this device has no Adreno GPU, so it is not used.").arg(QString::fromStdString(applied.pack_id));
+			if (applied.gpu == DriverPacks::GpuFamily::MaliKbase)
+				note = tr("The driver pack %1 is selected, but this device has no Mali GPU that malisx2 supports on Arm's kernel driver, so it is not used.").arg(QString::fromStdString(applied.pack_id));
+			else if (applied.gpu == DriverPacks::GpuFamily::Unknown)
+				note = tr("The driver pack %1 is for a GPU this version of ARMSX2 does not know, so it is not used.").arg(QString::fromStdString(applied.pack_id));
+			else
+				note = tr("The driver pack %1 is selected, but this device has no Adreno GPU, so it is not used.").arg(QString::fromStdString(applied.pack_id));
 			break;
 
 		case DriverPacks::ApplyOutcome::SystemDriver:
@@ -342,8 +345,6 @@ void DriverPacksSettingsWidget::onInstalledSelectionChanged()
 	m_ui.deleteButton->setEnabled(!m_ui.installedList->selectedItems().isEmpty() && !m_installing);
 }
 
-// ---- Apply & Restart, delete --------------------------------------------------------------------------------
-
 void DriverPacksSettingsWidget::onApplyClicked()
 {
 	const std::string id = chosenId();
@@ -431,8 +432,6 @@ void DriverPacksSettingsWidget::onDeleteClicked()
 	reloadInstalled();
 }
 
-// ---- Available packs and downloads -----------------------------------------------------------------------------
-
 void DriverPacksSettingsWidget::loadAvailable(bool force_refresh)
 {
 	if (m_listing_busy)
@@ -492,7 +491,6 @@ void DriverPacksSettingsWidget::showAvailable()
 	if (to_select)
 		m_ui.availableList->setCurrentItem(to_select);
 
-	// What the listing said about itself.
 	QString status;
 	if (m_listing_busy)
 		status = tr("Looking for driver packs...");
@@ -663,12 +661,10 @@ void DriverPacksSettingsWidget::onInstallStripButtonClicked()
 
 #include "moc_DriverPacksSettingsWidget.cpp"
 
-// ---- Screenshot entries (see QtShot.h) ---------------------------------------------------------------------------
-//
-// The page only has content on a device with an Adreno GPU. These entries stand one up on any machine
-// by giving the page a sysfs tree that has an msm DRM device, which is the seam DriverPacks itself
-// offers for its tests (ManagerConfig::sysfs_root). Packs live in a throwaway folder, so what the page
-// shows is what a first-time user would see.
+// Screenshot entries (see QtShot.h). The page only has content on a device with an Adreno GPU, so
+// these stand one up on any machine by giving the page a sysfs tree that has an msm DRM device, which
+// is the seam DriverPacks offers for its tests (ManagerConfig::sysfs_root). Packs live in a throwaway
+// folder, so the page shows what a first-time user would see.
 
 #include "QtShot.h"
 
@@ -701,6 +697,7 @@ namespace
 
 		DriverPacks::ManagerConfig config = DriverPacks::ManagerConfig::ForUser();
 		config.sysfs_root = s_sysfs->path().toStdString();
+		config.dev_root = root.filePath(QStringLiteral("dev")).toStdString(); // no /dev/mali0: not a kbase Mali either
 		DriverPacksSettingsWidget* page = new DriverPacksSettingsWidget(window, nullptr, std::move(config), platform_name);
 		page->resize(760, 820);
 		return page;

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "common/WindowInfo.h"
+
 #include <string>
 
 class Error;
@@ -101,8 +103,11 @@ namespace Vulkan
 {
 	bool IsVulkanLibraryLoaded();
 	bool LoadVulkanLibrary(Error* error);
-	bool LoadVulkanInstanceFunctions(VkInstance instance);
-	bool LoadVulkanDeviceFunctions(VkDevice device);
+	// wsi is the window system the instance was created for, Surfaceless for none: its surface
+	// functions are then required. swapchain says the device enabled VK_KHR_swapchain, which makes
+	// the swap chain functions required.
+	bool LoadVulkanInstanceFunctions(VkInstance instance, WindowInfo::Type wsi);
+	bool LoadVulkanDeviceFunctions(VkDevice device, bool swapchain);
 	void UnloadVulkanLibrary();
 	void ResetVulkanLibraryFunctionPointers();
 
@@ -130,16 +135,14 @@ namespace Vulkan
 	/// because a custom driver that fails to open falls back to the system loader silently.
 	struct CustomDriverStatus
 	{
-		/// A custom driver was configured when the library was loaded.
 		bool requested = false;
-		/// ... and it opened. False with `requested` means the system loader answered instead.
+		/// False with `requested` set means the system loader answered instead.
 		bool opened = false;
 		bool required = false;
 		std::string dir;
 		std::string name;
 		std::string redirect_dir;
 		std::string hook_lib_dir;
-		/// Why it did not open, when it did not.
 		std::string failure;
 	};
 	CustomDriverStatus GetCustomDriverStatus();

@@ -51,6 +51,8 @@ GSSetupPrimCodeGenerator::GSSetupPrimCodeGenerator(u64 key, void* code, size_t m
 	, m_sel(key)
 	, m_code_rx(static_cast<const u8*>(code))
 {
+	// ARMv8.0 FP and AdvSIMD only; debug builds assert on anything more.
+	m_emitter.SetCPUFeatures(vixl::CPUFeatures(vixl::CPUFeatures::kFP, vixl::CPUFeatures::kNEON));
 	m_en.z = m_sel.zb ? 1 : 0;
 	m_en.f = m_sel.fb && m_sel.fge ? 1 : 0;
 	m_en.t = m_sel.fb && m_sel.tfx != TFX_NONE ? 1 : 0;
@@ -227,18 +229,17 @@ void GSSetupPrimCodeGenerator::Texture()
 
 	if (m_sel.stqplane)
 	{
-		// The console's S, T and Q planes (GSPerspectivePlane.h). dscan.t holds the
-		// steps as integers, in units of g/2^14, already what the accumulator adds per
-		// pixel; nothing is floored here. There is no coordinate lag on this route (see
-		// CSetupPrim), and the lane offsets are the step times each lane's distance from
-		// the span's anchor. Every lane wraps at 32 bits, as the accumulator does.
+		// The console's S, T and Q planes (GSPerspectivePlane.h). dscan.t holds the steps as
+		// integers in units of g/2^14, already what the accumulator adds per pixel, so nothing
+		// is floored here. There is no coordinate lag on this route, and the lane offsets are
+		// the step times each lane's distance from the span's anchor. Every lane wraps at 32
+		// bits, as the accumulator does.
 		//
 		// v0 holds dscan.t.
 		armAsm->Movi(_vscratch.V4S(), 0);
 		armAsm->Str(_vscratch, _local(tclag.u));
 		armAsm->Str(_vscratch, _local(tclag.v));
 
-		// m_local.d4.stq = step * 4;
 		armAsm->Shl(v2.V4S(), v0.V4S(), 2);
 		armAsm->Str(v2, MemOperand(_locals, offsetof(GSScanlineLocalData, d4.stq)));
 
@@ -246,14 +247,10 @@ void GSSetupPrimCodeGenerator::Texture()
 
 		for (int j = 0; j < 3; j++)
 		{
-			// GSVector4i ds = step.xxxx(), dt = step.yyyy(), dq = step.zzzz();
-
 			armAsm->Dup(v2.V4S(), v0.V4S(), j);
 
 			for (int i = 0; i < (m_sel.notest ? 1 : 4); i++)
 			{
-				// m_local.d[i].s/t/q = ds/dt/dq * m_lane[i];
-
 				armAsm->Ldr(_vscratch, MemOperand(_scratchaddr, i * sizeof(g_const.m_lane[0])));
 				armAsm->Mul(v1.V4S(), v2.V4S(), _vscratch.V4S());
 

@@ -188,12 +188,10 @@ enum class SpeedHack
 	MTVU,
 	EECycleRate,
 	IOPThread,
-	// The dynamic EE cycle-rate governor. It is in this enum because that is what
-	// gives it a bit in PerGameOverrides::speedhacks, which is how "the player wrote
-	// this key in the per-game file" is asked — and the governor has to know that,
-	// because a per-game key is an opt-in it must obey. It is NOT a game database
-	// key: gamedb-schema.json's speedHacks object is closed (additionalProperties
-	// false), so no entry can carry it until someone deliberately opens it.
+	// The dynamic EE cycle-rate governor. It is in this enum for its bit in
+	// PerGameOverrides::speedhacks, which records that the player wrote the key in the
+	// per-game file (an opt-in the governor must obey). Not a game database key:
+	// gamedb-schema.json's speedHacks object is closed (additionalProperties false).
 	DynamicEECycleRate,
 	MaxCount,
 };
@@ -506,8 +504,7 @@ enum class GSUpscaler : u8
 
 /// Generates larger copies of game textures on the CPU, in the background, and feeds them to the
 /// renderer the way a texture pack would. Persisted as an integer under the INI key
-/// TextureUpscale (the first key was TextureUpscaleMode, whose values meant something else, so
-/// it is not read); append, never renumber.
+/// TextureUpscale; append, never renumber.
 enum class GSTextureUpscaleMode : u8
 {
 	Off,
@@ -744,6 +741,9 @@ struct TraceLogFilters
 //
 struct Pcsx2Config
 {
+	// Hosts with less RAM than this keep the smaller GIF path 2/3 buffers.
+	static constexpr u64 LOW_MEMORY_HOST_BYTES = 2ull << 30;
+
 	struct ProfilerOptions
 	{
 		BITFIELD32()
@@ -816,12 +816,10 @@ struct Pcsx2Config
 			EnableVUAot : 1;
 		BITFIELD_END
 
-		// Whether the on-disk VU program cache runs: EnableVUProgramCache, or
-		// EnableVUAot (owner decision 2026-10-15: vu-aot is bound to the cache,
-		// there is no separate switch). Every reader of the cache setting goes
-		// through this. Both bits are part of the CPU options, so changing
-		// either one resets the VU recompilers (VMManager::CheckForCPUConfigChanges),
-		// and the reset re-reads this.
+		// Whether the on-disk VU program cache runs: EnableVUProgramCache, or EnableVUAot
+		// (vu-aot is bound to the cache; there is no separate switch). Read the cache
+		// setting through this. Both bits are CPU options, so changing either resets the
+		// VU recompilers (VMManager::CheckForCPUConfigChanges), which re-reads this.
 		bool UseVUProgramCache() const { return EnableVUProgramCache || EnableVUAot; }
 
 		RecompilerOptions();
@@ -937,6 +935,10 @@ struct Pcsx2Config
 					// not free, so never leave it on for one arm of an A/B.
 					DumpDrawLog : 1,
 					UseBlitSwapChain : 1,
+					// Create the swap chain in the window's orientation and leave the screen's rotation
+					// to the compositor, as before pre-rotation. For surfaces that report a rotation
+					// they do not undo (issue #890).
+					DisableSwapChainPreRotation : 1,
 					DisableShaderCache : 1,
 					// Record the TFX pipelines each game uses and build them on worker threads
 					// when the game starts, ahead of their first draw. Needs the shader cache.
@@ -1438,7 +1440,11 @@ struct Pcsx2Config
 			// Let the governor lower the EE cycle rate below EECycleRate, by up to two
 			// steps, when the host cannot hold the frame deadline. Never above it, and
 			// never written back — EECycleRate stays the player's baseline.
-			DynamicEECycleRate : 1;
+			DynamicEECycleRate : 1,
+			// With iopThread: EE-started SIF0/SIF1 DMA does not hold the IOP. The EE posts the pump as an item stamped
+			// with its cycle, and the IOP runs it when its own clock reaches the stamp (IopThread::DeferSifPump). INI
+			// only, no UI, experimental. After DynamicEECycleRate so that no existing bit moves.
+			iopThreadDeferSif : 1;
 		BITFIELD_END
 
 		s8 EECycleRate; // EE cycle rate selector (1.0, 1.5, 2.0)
@@ -1449,13 +1455,10 @@ struct Pcsx2Config
 		int iopThreadLag;
 
 		// Development trace for the governor: one CSV row per sampling window, written
-		// to this path. Empty means no trace, which is the shipped state.
+		// to this path. Empty means no trace.
 		//
-		// ⚠️ Deliberately outside operator==, so CheckForCPUConfigChanges() cannot see
-		// it. Where a trace file goes has nothing to do with generated code, and that
-		// comparison is what decides whether the EE and microVU code caches are thrown
-		// away — turning the trace on mid-session must not cost a recompile of
-		// everything, or the first windows it records are measuring the reset.
+		// ⚠️ Deliberately outside operator==: CheckForCPUConfigChanges() must not see it,
+		// or turning the trace on mid-session would discard the EE and microVU code caches.
 		std::string DynamicEECycleRateTrace;
 
 		SpeedhackOptions();
@@ -1466,8 +1469,7 @@ struct Pcsx2Config
 
 		/// RetroAchievements hardcore mode. Overclocking stays allowed; underclocking
 		/// does not, because it slows the game down and makes it easier. That rules out
-		/// cycle skip and the dynamic governor outright — the governor exists to
-		/// underclock, and it does it without being asked.
+		/// cycle skip and the dynamic governor, which underclocks on its own.
 		void ClampForHardcoreMode();
 
 		bool operator==(const SpeedhackOptions& right) const;
@@ -1771,17 +1773,14 @@ struct Pcsx2Config
 	float CurrentCustomAspectRatio = 0.f;
 	bool IsPortableMode = false;
 
-	// Where the resolved EE cycle rate came from, which is not something the resolved
-	// integer can answer: the same -1 can be the global default, a game database entry,
-	// or a key the player wrote for this game, and only the first of those is a value
-	// nobody has staked a compatibility claim on. Comparing the final value against the
-	// global one gets this wrong every time the two happen to agree.
+	// Where the resolved EE cycle rate came from; the resolved integer cannot say. The same
+	// -1 can be the global default, a game database entry, or a key the player wrote for
+	// this game, and only the first is not a compatibility claim. The dynamic governor may
+	// only move a rate nobody claimed.
 	//
-	// The dynamic governor is the consumer: it may only move a rate nobody claimed.
-	//
-	// Re-derived on every settings apply and never loaded, saved or copied — see the
-	// deliberate absence from CopyRuntimeConfig(), which would otherwise carry a stale
-	// answer across the config rebuild that ApplySettings() does.
+	// Re-derived on every settings apply; never loaded, saved or copied. It is left out of
+	// CopyRuntimeConfig() on purpose, since ApplySettings() rebuilds the config and a copy
+	// would be stale.
 	bool GameDBSetEECycleRate = false;
 	bool PerGameClaimsEECycleRate = false;
 	bool PerGameClaimsDynamicEECycleRate = false;

@@ -160,6 +160,14 @@ namespace
 				}
 			}
 
+			case AutoTuneLever::DisplayScale:
+			{
+				const int step = static_cast<int>(std::lround(*v));
+				if (step <= 0)
+					return std::string(TRANSLATE_SV("AutoTune", "Screen"));
+				return fmt::format(TRANSLATE_FS("AutoTune", "{}x PS2"), step);
+			}
+
 			case AutoTuneLever::Blending:
 			{
 				switch (static_cast<int>(std::lround(*v)))
@@ -202,6 +210,8 @@ namespace
 				return std::string(TRANSLATE_SV("AutoTune", "Hardware download mode"));
 			case AutoTuneLever::Blending:
 				return std::string(TRANSLATE_SV("AutoTune", "Blending accuracy"));
+			case AutoTuneLever::DisplayScale:
+				return std::string(TRANSLATE_SV("AutoTune", "Display resolution (HW scaler)"));
 			default:
 				return "?";
 		}
@@ -224,6 +234,11 @@ AutoTune::LeverKey AutoTune::KeyForLever(AutoTuneLever lever)
 			return {"EmuCore/GS", "HWDownloadMode"};
 		case AutoTuneLever::Blending:
 			return {"EmuCore/GS", "accurate_blending_unit"};
+		case AutoTuneLever::DisplayScale:
+			// Not a key the core reads: the output surface belongs to the host, which keeps this setting itself
+			// (the Android app's hwScaler). The key is what a kept value is recorded under in the game's file, so
+			// that a reset can put it back and the host can be told which of its settings it names.
+			return {"EmuCore/GS", "HWScaler"};
 		default:
 			return {"", ""};
 	}
@@ -271,6 +286,7 @@ void AutoTune::WriteLeverValue(SettingsInterface& si, AutoTuneLever lever, doubl
 			break;
 		case AutoTuneLever::DownloadMode:
 		case AutoTuneLever::Blending:
+		case AutoTuneLever::DisplayScale:
 			si.SetIntValue(k.section, k.key, static_cast<int>(std::lround(value)));
 			break;
 		default:
@@ -332,8 +348,8 @@ AutoTune::Change AutoTune::Commit(SettingsInterface& si, AutoTuneLever lever, do
 	auto existing = std::find_if(changes.begin(), changes.end(), [&](const Change& c) {
 		return c.section == k.section && c.key == k.key;
 	});
-	// A recorded change only counts while the key still holds what we wrote. If the player has changed it
-	// since, what is there now is their value, and it is the one a reset must go back to.
+	// A recorded change only counts while the key still holds what we wrote. Otherwise the player has
+	// changed it, and their value is the one a reset must go back to.
 	if (existing != changes.end() && !(has_current && SameValue(current, existing->value)))
 	{
 		changes.erase(existing);
@@ -391,9 +407,8 @@ AutoTune::ResetResult AutoTune::Reset(SettingsInterface& si)
 		std::string current;
 		const bool present = si.GetStringValue(c.section.c_str(), c.key.c_str(), &current);
 
-		// Only a key that still holds what auto-tune wrote goes back. If the player has changed it since, or
-		// removed it, it is theirs now. A missing key is flagged: a frontend that keeps the settings in its own
-		// store can tell from there whether the player removed it.
+		// Only a key that still holds what auto-tune wrote goes back. One the player changed or removed is
+		// theirs now; a removed one is flagged absent (see LeftAlone).
 		if (!present || !SameValue(current, c.value))
 		{
 			result.left_alone.push_back(LeftAlone{c, !present});
@@ -451,6 +466,8 @@ std::string AutoTune::LeverLabel(AutoTuneLever lever, double value)
 			return fmt::format(TRANSLATE_FS("AutoTune", "download mode {}"), DisplayValue(lever, fmt::format("{:g}", value)));
 		case AutoTuneLever::Blending:
 			return fmt::format(TRANSLATE_FS("AutoTune", "blending {}"), DisplayValue(lever, fmt::format("{:g}", value)));
+		case AutoTuneLever::DisplayScale:
+			return fmt::format(TRANSLATE_FS("AutoTune", "display resolution {}"), DisplayValue(lever, fmt::format("{:g}", value)));
 		case AutoTuneLever::IopThread:
 			return std::string(TRANSLATE_SV("AutoTune", "IOP thread"));
 		case AutoTuneLever::EeGovernor:

@@ -5,10 +5,10 @@
 //
 // The pumps move data between IOP RAM and EE RAM through a 128-word FIFO. One call loops "IOP side
 // step, EE side step" until neither side can move, then clears its status bits in SBUS F240, and the
-// completion interrupts of both sides are scheduled on the way. The IOP thread work cuts the loop
-// body into one function per side. The cut must not change what the pumps do, so this test runs
-// scripted transfers through the real entry points (dmaSIF0/dmaSIF1 from the EE side,
-// psxDma9/psxDma10 from the IOP side) and compares, per script:
+// completion interrupts of both sides are scheduled on the way. The test pins down what the pumps do,
+// so that restructuring the loop body (for example into one function per side) cannot change it
+// unnoticed. It runs scripted transfers through the real entry points (dmaSIF0/dmaSIF1 from the EE
+// side, psxDma9/psxDma10 from the IOP side) and compares, per script:
 //
 //   - EE RAM (the 32 MB the DMA address translation exposes) and IOP RAM (2 MB);
 //   - the EE channel registers (sif0ch, sif1ch, sif2dma) and the IOP ones (hw_dma9, hw_dma10);
@@ -19,17 +19,16 @@
 //   - a digest of everything but the RAMs, taken after every entry call, so the state a transfer is
 //     left in half way through (one side started, the other not yet) is covered too.
 //
-// against hashes recorded from the pumps before the change (sif_pump_golden.inc). A script is a
-// chain of packets of 1 to 4096 words, with or without end and interrupt tags, started from either
-// side. Some scripts end with a side still armed, and one drives SIF1 through the DMAC's stall
-// control. The test does not say the recorded behaviour is right; it says it did not move.
+// against recorded hashes (sif_pump_golden.inc). A script is a chain of packets of 1 to 4096 words,
+// with or without end and interrupt tags, started from either side. Some scripts end with a side
+// still armed, and one drives SIF1 through the DMAC's stall control. The test does not say the
+// recorded behaviour is right; it says it did not move.
 //
 // What it cannot see: which of the two steps of a loop iteration runs first, and where in the
-// iteration SIF0's junk write sits. Swapping them was tried against 520 scripts (the producer's
-// completion always comes before the consumer's whichever way the steps are ordered, because the
-// consumer can only finish after the producer's last push) and nothing moved. A change that does
-// move the two steps is caught by the progress accounting, the stall flag, the junk write being
-// repeated each iteration, and the cycle counts, which were each tried and are caught.
+// iteration SIF0's junk write sits. The producer's completion always comes before the consumer's
+// whichever way the steps are ordered, because the consumer can only finish after the producer's last
+// push. A change to the progress accounting, the stall flag, the junk write being repeated each
+// iteration, or the cycle counts is caught.
 //
 // A hash proves nothing if the script never ran, so the scripts that finish also check what a
 // finished transfer has to look like: the payload arrived, both sides went idle, both completion
@@ -58,6 +57,9 @@
 #include "R3000A.h"
 #include "R5900.h"
 #include "Sif.h"
+#include "SifRestartTestSupport.h"
+#include "IopThread/IopThreadVm.h"
+#include "ps2/HwInternal.h"
 
 #include <gtest/gtest.h>
 
@@ -75,11 +77,8 @@ extern EE_intProcessStatus eeRunInterruptScan; // defined in R5900.cpp, declared
 
 namespace
 {
-	// ------------------------------------------------------------------------------------------
-	// Hashing. XXH64-shaped rounds, written out here so the test depends on nothing else and the
-	// recorded values are the same on every host (the PS2 side of all of this is little endian).
-	// ------------------------------------------------------------------------------------------
-
+	// XXH64-shaped rounds, written out here so the test depends on nothing else and the recorded values
+	// are the same on every host (the PS2 side of all of this is little endian).
 	constexpr u64 kP1 = 0x9E3779B185EBCA87ull;
 	constexpr u64 kP2 = 0xC2B2AE3D27D4EB4Full;
 	constexpr u64 kP3 = 0x165667B19E3779F9ull;
@@ -97,7 +96,7 @@ namespace
 		return h;
 	}
 
-	// Hash of a byte range. Four lanes, so a 32 MB RAM costs a few milliseconds.
+	// Four lanes keep the hash of a 32 MB RAM to a few milliseconds.
 	u64 HashBytes(const void* data, size_t size)
 	{
 		const u8* p = static_cast<const u8*>(data);
@@ -127,7 +126,6 @@ namespace
 		return Avalanche(h);
 	}
 
-	// Hash of a sequence of scalars.
 	class Digest
 	{
 	public:
@@ -165,10 +163,6 @@ namespace
 	private:
 		u64 m_s;
 	};
-
-	// ------------------------------------------------------------------------------------------
-	// Scripts
-	// ------------------------------------------------------------------------------------------
 
 	enum class Chan
 	{
@@ -229,10 +223,6 @@ namespace
 		std::vector<Call> calls;
 		Payload payload;
 	};
-
-	// ------------------------------------------------------------------------------------------
-	// The machine the scripts run on
-	// ------------------------------------------------------------------------------------------
 
 	template <typename T>
 	T Load(const u8* base, u32 off)
@@ -341,11 +331,10 @@ namespace
 		cpuRegs.cycle = 0x100001234ull; // past 32 bits, so a truncation shows
 		cpuRegs.nextEventCycle = cpuRegs.cycle + 3072;
 		psxRegs.cycle = 0x20000;
-		// With an IOP slice running (iopCycleEE > 0), CPU_INT breaks it (and zeroes iopCycleEE), and the
-		// IOP's PSX_INT asks the EE to look sooner when iopCycleEE is below the IOP's own next event, 8 EE
-		// cycles per IOP cycle away. So the slice scripts have an IOP event due in 1 IOP cycle, and a
-		// transfer whose EE completion is due in 9 to 28 cycles shows which of the two completions is
-		// scheduled first in the EE's next event cycle.
+		// With an IOP slice running (iopCycleEE > 0), CPU_INT breaks it and zeroes iopCycleEE, and PSX_INT
+		// asks the EE to look sooner when iopCycleEE is below the IOP's next event (8 EE cycles per IOP
+		// cycle). The slice scripts put an IOP event 1 IOP cycle out, so a transfer whose EE completion is
+		// due in 9 to 28 cycles shows which completion is scheduled first in the EE's next event cycle.
 		psxRegs.iopNextEventCycle = psxRegs.cycle + (s.iopSlice ? 1 : 1000);
 		psxRegs.iopCycleEE = s.iopSlice ? 500 : 0;
 		eeRunInterruptScan = s.scanRunning ? INT_RUNNING : INT_NOT_RUNNING;
@@ -362,16 +351,11 @@ namespace
 		psHu32(SBUS_F260) = 0x0260F260;
 	}
 
-	// ------------------------------------------------------------------------------------------
-	// Building the transfers
-	// ------------------------------------------------------------------------------------------
-
 	constexpr u32 kIopEnd = 0x40000000; // ID & 4 in an IOP tag
 	constexpr u32 kIopIrq = 0x80000000;
 
 	u32 EeTag(u32 qwc, u32 id, u32 irq) { return qwc | (id << 28) | (irq << 31); }
 
-	// What the last packet's tags carry for each way of ending the transfer.
 	struct EndFlags
 	{
 		u32 iopFlags = 0; // OR-ed into the IOP tag's address word
@@ -563,11 +547,10 @@ namespace
 
 		if (s.stall)
 		{
-			// The drain channel is SIF1 and the stall address is 36 quadwords in. The first chunk the EE
-			// side sends (32 quadwords, the FIFO's size) is under it; the next one (9 quadwords) is not,
-			// so the transfer stalls after the first chunk has moved, with the IOP side partway through
-			// it. The third call is made while still stalled, and must return without touching anything
-			// (it leaves the cycle counts of the call before it alone). Then STADR moves and it resumes.
+			// The stall address is 36 quadwords in. The first chunk the EE side sends (32 quadwords, the
+			// FIFO's size) is under it; the next one (9 quadwords) is not, so the transfer stalls after the
+			// first chunk with the IOP side partway through it. The third call is made while still stalled
+			// and must touch nothing, the cycle counts included. Then STADR moves and the transfer resumes.
 			dmacRegs.ctrl.STD = STD_SIF1;
 			dmacRegs.stadr.ADDR = sif1ch.madr + 36 * 16;
 			if (s.start == Start::EeFirst)
@@ -603,10 +586,6 @@ namespace
 				break;
 		}
 	}
-
-	// ------------------------------------------------------------------------------------------
-	// What gets hashed
-	// ------------------------------------------------------------------------------------------
 
 	struct Hashes
 	{
@@ -765,10 +744,6 @@ namespace
 		return r;
 	}
 
-	// ------------------------------------------------------------------------------------------
-	// The script list
-	// ------------------------------------------------------------------------------------------
-
 	const char* TermName(Term t)
 	{
 		switch (t)
@@ -817,7 +792,6 @@ namespace
 				for (const u32 w : {1u, 3u, 4u, 127u, 128u, 129u, 4096u})
 					all.push_back(Make(chan, start, {w}, Term::Both));
 
-				// The other ways to end it.
 				for (const Term term : {Term::TieIrq, Term::IopOnly, Term::EeOnly})
 					for (const u32 w : {4u, 127u, 129u, 4096u})
 						all.push_back(Make(chan, start, {w}, term));
@@ -852,8 +826,7 @@ namespace
 					//
 					// IOP first only. Started from the EE first, the two TTE words leave the FIFO with 2
 					// words free, WriteEEtoFifo then moves 0 quadwords, HandleEETransfer still counts that
-					// as progress, and with the IOP side not started SIF1Dma never returns. That is how the
-					// pump behaves today and is not this test's to change; the script would hang.
+					// as progress, and with the IOP side not started SIF1Dma never returns: the script hangs.
 					if (start == Start::IopFirst)
 					{
 						Script tte = Make(chan, start, {128}, Term::Both, "_tte");
@@ -862,7 +835,6 @@ namespace
 					}
 				}
 
-				// EE channel in NORMAL mode.
 				{
 					Script n = Make(chan, start, {128}, Term::Both, "_normal");
 					n.normalMode = true;
@@ -901,9 +873,6 @@ namespace
 		return all;
 	}
 
-	// A few hundred pseudo-random chains, so that the order of the steps inside a pump, and the junk
-	// logic meeting a full FIFO, are met in many alignments and not only in the hand-picked scripts.
-	// The generator is fixed, so the list is the same every time.
 	std::string Describe(const Script& s)
 	{
 		std::string d = std::string(s.chan == Chan::Sif0 ? "sif0 " : "sif1 ") + (s.start == Start::EeFirst ? "ee-first" : "iop-first") + " words " + Join(s.words) + " end " + TermName(s.term);
@@ -916,6 +885,9 @@ namespace
 		return d;
 	}
 
+	// A few hundred pseudo-random chains, so that the order of the steps inside a pump, and the junk
+	// logic meeting a full FIFO, are met in many alignments and not only in the hand-picked scripts.
+	// The generator is fixed, so the list is the same every time.
 	std::vector<Script> SweepScripts()
 	{
 		std::vector<Script> all;
@@ -975,10 +947,6 @@ namespace
 		}
 		return all;
 	}
-
-	// ------------------------------------------------------------------------------------------
-	// The recorded values
-	// ------------------------------------------------------------------------------------------
 
 	struct Golden
 	{
@@ -1053,10 +1021,6 @@ namespace
 	{
 		return !s.sweep && !s.stall && !s.normalMode && (s.term == Term::Both || s.term == Term::TieIrq);
 	}
-
-	// ------------------------------------------------------------------------------------------
-	// The fixture
-	// ------------------------------------------------------------------------------------------
 
 	// A pump that stops returning would otherwise hang the whole test binary until the CI timeout.
 	// The watchdog turns it into an abort that names the script.
@@ -1201,6 +1165,219 @@ TEST_P(SifPump, MatchesRecordedBehaviour)
 	if (!same)
 		ADD_FAILURE() << s.name << " now gives\n"
 					  << Row(s.name, r.h, r.summary);
+}
+
+// The IOP thread can run the EE's pump later than the transfer started (iopThreadDeferSif), and a pump can find the
+// transfer already finished. It must then change nothing the rest of the machine can see. The only fields it writes are
+// the two cycle counters, which a pump zeroes when it starts and reads only after it has added to them; the F240 bits it
+// clears are already clear.
+namespace
+{
+	class SifPumpIdle : public ::testing::Test
+	{
+	protected:
+		static void SetUpTestSuite() { s_ready = BringUpMachine(); }
+		static void TearDownTestSuite()
+		{
+			TearDownMachine();
+			s_ready = false;
+		}
+		void SetUp() override { ASSERT_TRUE(s_ready) << "could not allocate the EE and IOP RAM blocks"; }
+		static bool s_ready;
+	};
+	bool SifPumpIdle::s_ready = false;
+
+	// The digest of everything but the RAMs, with the cycle counters of both sides taken out.
+	u64 DigestWithoutCycleCounters()
+	{
+		const s32 c[6] = {static_cast<s32>(sif0.ee.cycles), static_cast<s32>(sif0.iop.cycles), static_cast<s32>(sif1.ee.cycles),
+			static_cast<s32>(sif1.iop.cycles), static_cast<s32>(sif2.ee.cycles), static_cast<s32>(sif2.iop.cycles)};
+		sif0.ee.cycles = sif0.iop.cycles = sif1.ee.cycles = sif1.iop.cycles = sif2.ee.cycles = sif2.iop.cycles = 0;
+		const u64 digest = StepDigest();
+		sif0.ee.cycles = c[0];
+		sif0.iop.cycles = c[1];
+		sif1.ee.cycles = c[2];
+		sif1.iop.cycles = c[3];
+		sif2.ee.cycles = c[4];
+		sif2.iop.cycles = c[5];
+		return digest;
+	}
+} // namespace
+
+TEST_F(SifPumpIdle, APumpAfterTheTransferFinishedChangesNothingTheMachineCanSee)
+{
+	for (const Chan chan : {Chan::Sif0, Chan::Sif1})
+	{
+		for (const u32 words : {4u, 129u, 4096u})
+		{
+			for (const Start start : {Start::EeFirst, Start::IopFirst})
+			{
+				const Script s = Make(chan, start, {words}, Term::Both);
+				const RunResult r = RunScript(s);
+				ExpectFinished(s, r.built);
+				ASSERT_FALSE(HasFatalFailure()) << s.name;
+
+				const u64 before = DigestWithoutCycleCounters();
+				const u64 eeram = HashBytes(eeMem->Main, Ps2MemSize::ExposedRam);
+				const u64 iopram = HashBytes(iopMem->Main, Ps2MemSize::ExposedIopRam);
+
+				if (chan == Chan::Sif0)
+					SIF0Dma();
+				else
+					SIF1Dma();
+
+				EXPECT_EQ(before, DigestWithoutCycleCounters()) << s.name << ": the extra pump changed the machine";
+				EXPECT_EQ(eeram, HashBytes(eeMem->Main, Ps2MemSize::ExposedRam)) << s.name;
+				EXPECT_EQ(iopram, HashBytes(iopMem->Main, Ps2MemSize::ExposedIopRam)) << s.name;
+			}
+		}
+	}
+}
+
+// The BIOS stops a running SIF channel (CHCR = 0) and starts it again. With the IOP on its own thread, the IOP is run up to
+// the EE's cycle before the EE's pump of the restart, and if it re-arms its DMA on the way, its pump runs first. These make
+// the calls in that order: the EE's start, the stop through the register write, the restart (STR set, the end flag cleared
+// as dmaSIFn does), the IOP's re-arm, and last the EE's own pump. The restart must be served once, and only by what the EE
+// started.
+TEST_F(SifPumpIdle, AStoppedSif1ChainThatIsStartedAgainIsSentOnceAndNoTagAfterItsEndIsRead)
+{
+	using namespace sif1restart;
+	ResetMachine(Script{});
+	BuildPacketA();
+	sif1ch.chcr.set(0x184);
+	dmaSIF1();
+	ASSERT_GT(sif1ch.qwc, 0u) << "the IOP is not armed, so the first pump stops part way through packet A";
+
+	hwWrite32<0x0c>(D6_CHCR, 0);
+	ASSERT_FALSE(sif1ch.chcr.STR);
+
+	FixUpAndQueuePacketB();
+	sif1ch.chcr.set(0x184);
+	sif1.ee.end = false;
+	psxDma10(hw_dma10.madr, hw_dma10.bcr, hw_dma10.chcr);
+	SIF1DmaFromEe();
+
+	ExpectBothPacketsAndNothingElse();
+}
+
+// The same order on SIF0. The EE side is stopped while it waits for its next tag. After the restart the IOP sends two
+// packets; the first ends the EE's chain, so the second must stay in the FIFO for the next start.
+TEST_F(SifPumpIdle, AStoppedSif0ChannelThatIsStartedAgainTakesNoPacketAfterTheEndOfItsChain)
+{
+	constexpr u32 kTags = 0x1000, kData = 0x20000, kEeDst = 0x100000;
+	ResetMachine(Script{});
+	u8* const iop = iopMem->Main;
+	// Three 8-word packets. The first ends the IOP's first chain and leaves the EE side waiting for a tag; the second ends
+	// the EE side; the third ends the IOP's second chain.
+	const u32 ee_id[3] = {TAG_CNT, TAG_END, TAG_END};
+	const u32 iop_end[3] = {0x40000000, 0, 0x40000000};
+	for (u32 p = 0; p < 3; p++)
+	{
+		Store32(iop, kTags + 16 * p + 0, (kData + 0x100 * p) | iop_end[p]);
+		Store32(iop, kTags + 16 * p + 4, 8);
+		Store32(iop, kTags + 16 * p + 8, 2 | (ee_id[p] << 28));
+		Store32(iop, kTags + 16 * p + 12, kEeDst + 0x100 * p);
+		for (u32 i = 0; i < 8; i++)
+			Store32(iop, kData + 0x100 * p + 4 * i, 0xD0000000 | (p << 8) | i);
+	}
+	hw_dma9.bcr = 0;
+	hw_dma9.chcr = 0x01000201;
+
+	sif0ch.chcr.set(0x184);
+	dmaSIF0();
+	hw_dma9.tadr = kTags;
+	psxDma9(hw_dma9.madr, hw_dma9.bcr, hw_dma9.chcr);
+	ASSERT_EQ(0xD0000007u, Load<u32>(eeMem->Main, kEeDst + 28)) << "the first packet arrived";
+	ASSERT_TRUE(sif0.ee.busy) << "the EE side waits for its next tag";
+
+	hwWrite32<0x0c>(D5_CHCR, 0);
+	ASSERT_FALSE(sif0ch.chcr.STR);
+
+	sif0ch.chcr.set(0x184);
+	sif0.ee.end = false;
+	hw_dma9.tadr = kTags + 16;
+	psxDma9(hw_dma9.madr, hw_dma9.bcr, hw_dma9.chcr);
+	SIF0DmaFromEe();
+
+	EXPECT_EQ(0xD0000107u, Load<u32>(eeMem->Main, kEeDst + 0x100 + 28)) << "the second packet arrived";
+	EXPECT_EQ(0u, Load<u32>(eeMem->Main, kEeDst + 0x200)) << "the third packet was taken by a channel its chain had ended";
+	EXPECT_EQ(12, sif0.fifo.size) << "the third packet's tag and words wait in the FIFO";
+	EXPECT_FALSE(sif0.ee.busy);
+	EXPECT_NE(0u, cpuRegs.interrupt & (1u << DMAC_SIF0)) << "the EE's completion is scheduled";
+}
+
+// The IOP thread's lag rules watch the SIF RPC packets that pass through these pumps for calls to the memory card server
+// (IopThread::McServerCallInProgress). These run the packets through the real pumps.
+namespace
+{
+	constexpr u32 kMcServerData = 0x50000; // IOP address of the server's data, whose first word is the server's id
+	constexpr u32 kSif1Payload = 0x100020; // BuildSif1: the first packet's payload in EE RAM, after the chain tag and the IOP tag
+	constexpr u32 kSif1IopDst = 0x30000; // BuildSif1: where it lands in IOP RAM
+	constexpr u32 kSif0Payload = 0x20000; // BuildSif0: the first packet's payload in IOP RAM
+	constexpr u32 kSif0EeDst = 0x100000; // BuildSif0: where it lands in EE RAM
+	constexpr u32 kMcClient = 0x0047a900;
+
+	// The EE sends an RPC call to the memory card server over SIF1, as the game's library does (a 64-byte packet).
+	void SendMcCall(u32 rmode, u32 pkt_addr)
+	{
+		const Script s = Make(Chan::Sif1, Start::EeFirst, {16}, Term::Both, "_mccall");
+		ResetMachine(s);
+		Rng rng(s.name);
+		const Built b = BuildSif1(s, rng);
+		const u32 call[16] = {0x40, 0x0008f000, 0x8000000A, 0, 1, pkt_addr, 7, kMcClient, 5, 0x400, 0x00480000, 0x400, rmode, kMcServerData, 0, 0};
+		for (u32 i = 0; i < 16; i++)
+			Store32(eeMem->Main, kSif1Payload + 4 * i, call[i]);
+		Store32(iopMem->Main, kMcServerData, 0x80000400);
+		for (const Call c : b.calls)
+			DoCall(s, c);
+		ASSERT_EQ(0x8000000Au, Load<u32>(iopMem->Main, kSif1IopDst + 8)) << "the call did not reach IOP RAM";
+	}
+
+	// The IOP sends 12 words over SIF0 to kSif0EeDst: `packet`, or whatever the script puts there.
+	void SendFromIop(const u32* packet)
+	{
+		const Script s = Make(Chan::Sif0, Start::IopFirst, {12}, Term::Both, "_mcend");
+		ResetMachine(s);
+		Rng rng(s.name);
+		const Built b = BuildSif0(s, rng);
+		if (packet)
+		{
+			for (u32 i = 0; i < 12; i++)
+				Store32(iopMem->Main, kSif0Payload + 4 * i, packet[i]);
+		}
+		for (const Call c : b.calls)
+			DoCall(s, c);
+	}
+} // namespace
+
+TEST_F(SifPumpIdle, AMemoryCardServerCallIsInProgressFromItsSif1PacketToItsSif0End)
+{
+	IopThread::ResyncClocks();
+	SendMcCall(1, 0x00470000);
+	EXPECT_TRUE(IopThread::McServerCallInProgress(1000));
+	// The server's RPC end packet for the client.
+	const u32 end[12] = {0x30, 0x00470000, 0x80000008, 0, 1, 0x00470000, 7, kMcClient, 0x8000000A, kMcServerData, 0x00480000, 0};
+	SendFromIop(end);
+	EXPECT_FALSE(IopThread::McServerCallInProgress(1000));
+}
+
+// A call made without the no-wait mode gets no RPC end packet: the IOP writes the end straight into the EE's copy of the call packet.
+TEST_F(SifPumpIdle, ACallWithNoEndPacketEndsWhenTheIopWritesItsPacketBack)
+{
+	IopThread::ResyncClocks();
+	SendMcCall(0, kSif0EeDst);
+	EXPECT_TRUE(IopThread::McServerCallInProgress(1000));
+	SendFromIop(nullptr);
+	EXPECT_FALSE(IopThread::McServerCallInProgress(1000));
+}
+
+TEST_F(SifPumpIdle, AStateLoadOrResetForgetsTheMemoryCardCallsInProgress)
+{
+	IopThread::ResyncClocks();
+	SendMcCall(1, 0x00470000);
+	EXPECT_TRUE(IopThread::McServerCallInProgress(1000));
+	IopThread::ResyncClocks(); // what a savestate load and a VM reset call
+	EXPECT_FALSE(IopThread::McServerCallInProgress(1000));
 }
 
 INSTANTIATE_TEST_SUITE_P(Scripts, SifPump, ::testing::ValuesIn(AllScripts()),

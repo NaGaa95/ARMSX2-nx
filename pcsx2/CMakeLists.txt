@@ -108,6 +108,8 @@ set(pcsx2Sources
 	IopIrq.cpp
 	IopMem.cpp
 	IopThread/IopChannels.cpp
+	IopThread/IopLagControl.cpp
+	IopThread/IopLagRules.cpp
 	IopThread/IopPlacement.cpp
 	IopThread/IopThread.cpp
 	IopThread/IopThreadMode.cpp
@@ -548,6 +550,7 @@ set(pcsx2PADSources
 	SIO/Pad/PadJogcon.cpp
 	SIO/Pad/PadNegcon.cpp
 	SIO/Pad/PadPopn.cpp
+	SIO/Pad/PadScript.cpp
 	SIO/Pad/PadNotConnected.cpp
 )
 set(pcsx2PADHeaders
@@ -558,6 +561,7 @@ set(pcsx2PADHeaders
 	SIO/Pad/PadJogcon.h
 	SIO/Pad/PadNegcon.h
 	SIO/Pad/PadPopn.h
+	SIO/Pad/PadScript.h
 	SIO/Pad/PadNotConnected.h
 	SIO/Pad/PadTypes.h
 )
@@ -589,6 +593,8 @@ endif()
 set(pcsx2GSSources
 	GS/GS.cpp
 	GS/GSCacheFile.cpp
+	GS/GSBlockId.cpp
+	GS/GSCompileQueue.cpp
 	GS/GSClut.cpp
 	GS/GSDrawingContext.cpp
 	GS/GSDrawingEnvironment.cpp
@@ -631,10 +637,12 @@ set(pcsx2GSSources
 	GS/Renderers/Common/GSVertexTrace.cpp
 	GS/Renderers/Null/GSDeviceNone.cpp
 	GS/Renderers/Null/GSRendererNull.cpp
+	GS/Renderers/HW/GSBurstMemo.cpp
 	GS/Renderers/HW/GSDrawLog.cpp
 	GS/Renderers/HW/GSHwHack.cpp
 	GS/Renderers/HW/GSLineRuns.cpp
 	GS/Renderers/HW/GSRendererHW.cpp
+	GS/Renderers/HW/GSRendererHWBurstMemo.cpp
 	GS/Renderers/HW/GSTextureCache.cpp
 	GS/Renderers/HW/GSTextureReplacementLoaders.cpp
 	GS/Renderers/HW/GSTextureReplacements.cpp
@@ -661,6 +669,7 @@ set(pcsx2GSHeaders
 	GS/GSBackQueue.h
 	GS/GSCacheFile.h
 	GS/GSClut.h
+	GS/GSCompileQueue.h
 	GS/GSCompileStats.h
 	GS/GSDrawingContext.h
 	GS/GSDrawingEnvironment.h
@@ -683,10 +692,12 @@ set(pcsx2GSHeaders
 	GS/GSTables.h
 	GS/GSUtil.h
 	GS/GSVector.h
+	GS/GSBlockId.h
 	GS/GSXXH.h
 	GS/MultiISA.h
 	GS/Renderers/Common/GSBlendCarry.h
 	GS/Renderers/Common/GSBlendConstantPolicy.h
+	GS/Renderers/Common/GSRunsPolicy.h
 	GS/Renderers/Common/GSBackThreadPolicy.h
 	GS/Renderers/Common/GSCopyRoadBlendingPolicy.h
 	GS/Renderers/Common/GSDynamicFeedbackLoopPolicy.h
@@ -696,8 +707,10 @@ set(pcsx2GSHeaders
 	GS/Renderers/Common/GSFastList.h
 	GS/Renderers/Common/GSHeadlessPresent.h
 	GS/Renderers/Common/GSAlphaBitLogicOp.h
+	GS/Renderers/Common/GSRunSnapshot.h
 	GS/Renderers/Common/GSReplacementAlphaSnap.h
 	GS/Renderers/Common/GSFastStencilShadow.h
+	GS/Renderers/Common/GSStencilCounter.h
 	GS/Renderers/Common/GSFieldShiftDetector.h
 	GS/Renderers/Common/GSFieldShiftPolicy.h
 	GS/Renderers/Common/GSFramebufferFetchPolicy.h
@@ -714,6 +727,7 @@ set(pcsx2GSHeaders
 	GS/Renderers/Common/GSShaderEnums.h
 	GS/Renderers/Common/GSSelfReadRoadPolicy.h
 	GS/Renderers/Common/GSSnapshotPolicy.h
+	GS/Renderers/Common/GSTargetSizePolicy.h
 	GS/Renderers/Common/GSStreamRingFlushRange.h
 	GS/Renderers/Common/GSStreamRingGrowth.h
 	GS/Renderers/Common/GSStreamRingMemoryPolicy.h
@@ -724,11 +738,14 @@ set(pcsx2GSHeaders
 	GS/Renderers/Null/GSNullDeviceProfile.h
 	GS/Renderers/Null/GSRendererNull.h
 	GS/Renderers/HW/GSAlphaKnownBits.h
+	GS/Renderers/HW/GSAlphaKnownRects.h
 	GS/Renderers/HW/GSDepthCoverage.h
 	GS/Renderers/HW/GSDrawAlphaMask.h
 	GS/Renderers/HW/GSDrawLog.h
 	GS/Renderers/HW/GSHwHack.h
 	GS/Renderers/HW/GSLineRuns.h
+	GS/Renderers/HW/GSBurstMemo.h
+	GS/Renderers/HW/GSDepthFormatMove.h
 	GS/Renderers/HW/GSLineWalk.h
 	GS/Renderers/HW/GSPointPlace.h
 	GS/Renderers/HW/GSRendererHW.h
@@ -749,12 +766,15 @@ set(pcsx2GSHeaders
 	GS/Renderers/SW/GSDrawScanline.h
 	GS/Renderers/SW/GSNewCodeGenerator.h
 	GS/Renderers/SW/GSPerspectivePlane.h
+	GS/Renderers/SW/GSStqExtremes.h
 	GS/Renderers/SW/GSRasterizer.h
 	GS/Renderers/SW/GSRendererSW.h
 	GS/Renderers/SW/GSScanlineEnvironment.h
 	GS/Renderers/SW/GSVertexQDivide.h
 	GS/Renderers/SW/GSSetupPrimCodeGenerator.all.h
 	GS/Renderers/SW/GSSwTextureDirty.h
+	GS/Renderers/SW/GSSwTargetAlias.h
+	GS/Renderers/SW/GSSwTextureReaders.h
 	GS/Renderers/SW/GSTextureCacheSW.h
 	GS/Renderers/SW/GSVertexSW.h
 	)
@@ -784,6 +804,7 @@ if(USE_OPENGL)
 		GS/Renderers/OpenGL/GSTextureOGL.cpp
 	)
 	list(APPEND pcsx2GSHeaders
+		GS/Renderers/OpenGL/GLADFunctions.inl
 		GS/Renderers/OpenGL/GLContext.h
 		GS/Renderers/OpenGL/GLProgram.h
 		GS/Renderers/OpenGL/GLShaderCache.h
@@ -835,6 +856,7 @@ if(USE_VULKAN)
 	list(APPEND pcsx2GSSources
 		GS/Renderers/Vulkan/GSDeviceVK.cpp
 		GS/Renderers/Vulkan/GSLsfg.cpp
+		GS/Renderers/Vulkan/GSRunsVK.cpp
 		GS/Renderers/Vulkan/GSTextureVK.cpp
 		GS/Renderers/Vulkan/vk_mem_alloc.cpp
 		GS/Renderers/Vulkan/VKBuilders.cpp
@@ -906,9 +928,11 @@ if(USE_VULKAN)
 	list(APPEND pcsx2GSHeaders
 		GS/Renderers/Vulkan/GSDeviceVK.h
 		GS/Renderers/Vulkan/GSLsfg.h
+		GS/Renderers/Vulkan/GSRunsVK.h
 		GS/Renderers/Vulkan/GSTextureVK.h
 		GS/Renderers/Vulkan/VKLibretro.h
 		GS/Renderers/Vulkan/VKBuilders.h
+		GS/Renderers/Vulkan/VKCalibratedTimestamps.h
 		GS/Renderers/Vulkan/VKEntryPoints.h
 		GS/Renderers/Vulkan/VKEntryPoints.inl
 		GS/Renderers/Vulkan/VKLoader.h
@@ -1435,12 +1459,15 @@ set(pcsx2x86Headers
 # ARM64
 set(pcsx2arm64Sources
 	arm64/AsmHelpers.cpp
+	arm64/BlockLut-arm64.cpp
 	arm64/FPU-divunit-arm64.cpp
 	arm64/iCore-arm64.cpp
 	arm64/iR3000A-arm64.cpp
 	arm64/iR3000Atables-arm64.cpp
 	arm64/iR5900-arm64.cpp
 	arm64/iR5900Templates-arm64.cpp
+	arm64/RecCrashReport-arm64.cpp
+	arm64/RecErrorReport-arm64.cpp
 	x86/BaseblockEx.cpp  # arch-neutral baseblock manager, shared with the x86 build
 	arm64/iR5900Arit-arm64.cpp
 	arm64/iR5900AritImm-arm64.cpp
@@ -1461,6 +1488,7 @@ set(pcsx2arm64Sources
 	arm64/Vif_UnpackNEON.cpp
 	arm64/RecStubs.cpp
 	arm64/microVU-arm64.cpp
+	arm64/microVU_JumpTable-arm64.cpp
 	arm64/vuaot/VuAotBackground.cpp
 	arm64/vuaot/VuAotDecode.cpp
 	arm64/vuaot/VuAotGraph.cpp
@@ -1476,9 +1504,12 @@ set(pcsx2arm64Sources
 
 set(pcsx2arm64Headers
 	arm64/AsmHelpers.h
+	arm64/BlockLut-arm64.h
 	arm64/FPU-divunit-arm64.h
 	arm64/iCore-arm64.h
 	arm64/iR3000A-arm64.h
+	arm64/RecCrashReport-arm64.h
+	arm64/RecErrorReport-arm64.h
 	arm64/iR5900-arm64.h
 	arm64/iR5900Analysis.h
 	arm64/microVU-arm64.h
@@ -1489,6 +1520,7 @@ set(pcsx2arm64Headers
 	arm64/vuaot/microVU_VuAot-arm64.inl
 	arm64/microVU_Misc-arm64.h
 	arm64/VuFmacFlags-arm64.h
+	arm64/microVU_JumpTable-arm64.h
 	arm64/vuaot/VuAotBackground.h
 	arm64/vuaot/VuAotDecode.h
 	arm64/vuaot/VuAotPersist.h
@@ -1580,6 +1612,14 @@ if(ANDROID)
 	if(ARMSX2_USE_OBOE)
 		list(APPEND pcsx2HostSources
 			Host/OboeAudioStream.cpp)
+		# The emulated PS2 mic (SingStar et al.) needs a host audio *input* device. On Android that is
+		# Oboe/AAudio, so the usb-mic stack gets its own oboe-backed AudioDevice next to cubeb's; the
+		# factory in usb-mic.cpp picks it via ARMSX2_USE_OBOE. The header is listed conditionally too,
+		# so desktop IDEs don't see an <oboe/Oboe.h> include they can't resolve.
+		list(APPEND pcsx2USBSources
+			USB/usb-mic/audiodev-oboe.cpp)
+		list(APPEND pcsx2USBHeaders
+			USB/usb-mic/audiodev-oboe.h)
 		target_link_libraries(PCSX2_FLAGS INTERFACE
 			oboe)
 		target_compile_definitions(PCSX2_FLAGS INTERFACE ARMSX2_USE_OBOE)
@@ -1803,8 +1843,26 @@ add_custom_command(
 	COMMENT "Hashing the GS sources for the shader cache identity"
 	VERBATIM)
 target_sources(PCSX2 PRIVATE "${ARMSX2_GS_CACHE_ID_DIR}/gs_cache_build_id.h")
+# What a recorded Vulkan pipeline key's bits mean (cmake/GSKeyLayoutId.cmake): the key lists are named by
+# it, not by the build identity, so they survive the builds that leave the selectors alone.
+set(ARMSX2_GS_KEY_LAYOUT_INPUTS
+	"${ARMSX2_REPO_ROOT}/pcsx2/GS/Renderers/Common/GSDevice.h"
+	"${ARMSX2_REPO_ROOT}/pcsx2/GS/Renderers/Common/GSShaderEnums.h"
+	"${ARMSX2_REPO_ROOT}/pcsx2/GS/Renderers/Common/GSAlphaBitLogicOp.h"
+	"${ARMSX2_REPO_ROOT}/pcsx2/GS/Renderers/Vulkan/GSDeviceVK.h")
+string(JOIN "|" ARMSX2_GS_KEY_LAYOUT_ARG ${ARMSX2_GS_KEY_LAYOUT_INPUTS})
+add_custom_command(
+	OUTPUT "${ARMSX2_GS_CACHE_ID_DIR}/gs_key_layout_id.h"
+	COMMAND ${CMAKE_COMMAND}
+		-DOUT=${ARMSX2_GS_CACHE_ID_DIR}/gs_key_layout_id.h
+		"-DFILES=${ARMSX2_GS_KEY_LAYOUT_ARG}"
+		-P "${ARMSX2_REPO_ROOT}/cmake/GSKeyLayoutId.cmake"
+	DEPENDS ${ARMSX2_GS_KEY_LAYOUT_INPUTS} "${ARMSX2_REPO_ROOT}/cmake/GSKeyLayoutId.cmake"
+	COMMENT "Hashing the TFX pipeline key layout"
+	VERBATIM)
+target_sources(PCSX2 PRIVATE "${ARMSX2_GS_CACHE_ID_DIR}/gs_key_layout_id.h")
 set_source_files_properties(GS/GSCacheFile.cpp PROPERTIES
-	OBJECT_DEPENDS "${ARMSX2_GS_CACHE_ID_DIR}/gs_cache_build_id.h"
+	OBJECT_DEPENDS "${ARMSX2_GS_CACHE_ID_DIR}/gs_cache_build_id.h;${ARMSX2_GS_CACHE_ID_DIR}/gs_key_layout_id.h"
 	INCLUDE_DIRECTORIES "${ARMSX2_GS_CACHE_ID_DIR}")
 
 # common Sources
@@ -2095,11 +2153,13 @@ if (APPLE)
 	# "framework not found".
 	#
 	# ARMSX2_REAL_DEVICE is the iOS app's own switch and nothing sets it for the
-	# libretro core, which is only ever built against a device SDK - and without
-	# the framework the link is short MTLFXSpatialScalerDescriptor, because the
-	# header is there and PCSX2_HAS_METALFX is 1.
+	# libretro core, which is only ever built against a device SDK, or for Mac
+	# Catalyst - and without the framework the link is short
+	# MTLFXSpatialScalerDescriptor, because the header is there and
+	# PCSX2_HAS_METALFX is 1.
 	if(NOT CMAKE_SYSTEM_NAME STREQUAL "tvOS"
-	   AND (ARMSX2_REAL_DEVICE OR ENABLE_LIBRETRO OR NOT CMAKE_SYSTEM_NAME STREQUAL "iOS"))
+	   AND (ARMSX2_REAL_DEVICE OR ARMSX2_MAC_CATALYST OR ENABLE_LIBRETRO
+	        OR NOT CMAKE_SYSTEM_NAME STREQUAL "iOS"))
 		target_link_options(PCSX2_FLAGS INTERFACE "SHELL:-weak_framework MetalFX")
 	endif()
 endif()

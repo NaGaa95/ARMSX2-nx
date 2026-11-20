@@ -135,7 +135,7 @@ public:
 	{
 		PSSelector ps;
 		VSSelector vs;
-		u8 pad[15];
+		u8 pad[14];
 
 		// Compare ONLY the meaningful key fields, matching ProgramSelectorHash above
 		// (which hashes {vs.key, ps.key_hi, ps.key_lo}). BitEqual() memcmp'd all 32 bytes
@@ -424,6 +424,7 @@ public:
 	void EndPresent() override;
 
 	bool SetGPUTimingEnabled(bool enabled) override;
+	void SetGameIdentity(const std::string& serial, u32 crc) override;
 	float GetAndResetAccumulatedGPUTime() override;
 
 	bool SetGPUPipelineStatisticsEnabled(bool enabled) override;
@@ -513,7 +514,7 @@ public:
 	GLuint GetPaletteSamplerID();
 
 #ifdef __ANDROID__
-	// ---- Remote play (GSRemotePlay.h). GS thread, apart from what the ring publishes. ----
+	// Remote play (GSRemotePlay.h). GS thread, apart from what the ring publishes.
 public:
 	void RemotePlayVSync(GSTexture* src, const GSVector4& src_uv, const GSVector4& area) override;
 

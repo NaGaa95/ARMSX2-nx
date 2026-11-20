@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 ARMSX2 Contributors
 // SPDX-License-Identifier: GPL-3.0+
 
-// Big Picture's Texture Packs page: the online catalog of community texture packs, a detail view for
-// each pack, installing and deleting packs, and the list of packs already installed. The page is a
-// settings page (SettingsPage::TexturePacks); the other FullscreenUI files call in here with one
-// line each (declarations at the end of FullscreenUI_Internal.h).
+// Big Picture's Texture Packs page (SettingsPage::TexturePacks). The other FullscreenUI files call in
+// here with one line each (declarations at the end of FullscreenUI_Internal.h).
 //
 // Threads. All state below belongs to the GS thread, which draws the page. The catalog download, the
 // install and the disk work (listing and deleting installed packs) run on worker threads and hand
@@ -14,7 +12,7 @@
 //     they only matter while the page is open.
 //   * An install keeps reporting while the page is closed, because its progress is a keyed
 //     notification. Its reports hop worker -> CPU thread -> GS thread, as the cover downloader's do
-//     (a push into the GS ring is only allowed from the CPU thread).
+//     (see PostToGSThread).
 //
 // The page runs under the settings lock (DrawSettingsWindow holds it around every page body), which is
 // a plain mutex: nothing drawn here may call a helper that takes Host::GetSettingsLock(). Work that
@@ -89,15 +87,11 @@ namespace
 	{
 		Popular,
 		All,
+		ThisGame,
 		MyGames,
 		Installed,
 	};
 
-	//////////////////////////////////////////////////////////////////////////
-	// State (GS thread)
-	//////////////////////////////////////////////////////////////////////////
-
-	// A catalog pack plus what the list searches in.
 	struct PackEntry
 	{
 		Cat::TexturePack pack;
@@ -176,10 +170,6 @@ namespace
 	};
 	ShotAction s_shot_action = ShotAction::None;
 	std::string s_shot_id;
-
-	//////////////////////////////////////////////////////////////////////////
-	// Hand-over from the worker threads
-	//////////////////////////////////////////////////////////////////////////
 
 	struct LocalResult
 	{
@@ -272,10 +262,6 @@ namespace
 		});
 	}
 
-	//////////////////////////////////////////////////////////////////////////
-	// Text
-	//////////////////////////////////////////////////////////////////////////
-
 	std::string Lower(std::string_view text)
 	{
 		std::string out(text);
@@ -339,8 +325,8 @@ namespace
 		return raw;
 	}
 
-	// Who made the pack. An entry whose creators list is empty has nobody named: say so, and never
-	// show the "Unknown creator" placeholder the older catalog files keep in `authors`.
+	// Says nobody has named the creator when the creators list is empty, and never shows the "Unknown
+	// creator" placeholder that older catalog files keep in `authors`.
 	std::string CreatorsText(const Cat::TexturePack& pack)
 	{
 		if (pack.HasNamedCreators())
@@ -371,6 +357,8 @@ namespace
 				return FSUI_CSTR("Popular Today");
 			case ListFilter::All:
 				return FSUI_CSTR("All");
+			case ListFilter::ThisGame:
+				return FSUI_CSTR("This Game");
 			case ListFilter::MyGames:
 				return FSUI_CSTR("My Games");
 			case ListFilter::Installed:
@@ -461,10 +449,6 @@ namespace
 
 	void StartLocalRefresh(std::string delete_folder = {}, std::string delete_name = {});
 
-	//////////////////////////////////////////////////////////////////////////
-	// Installed state
-	//////////////////////////////////////////////////////////////////////////
-
 	void RefreshRecordsIfChanged(bool force)
 	{
 		const u32 revision = Cat::TexturePackState::Revision();
@@ -504,7 +488,6 @@ namespace
 		return nullptr;
 	}
 
-	// The folder a pack is installed in, if it is.
 	const Cat::TexturePackInstaller::InstalledPack* FindInstalledForPack(const std::string& pack_id)
 	{
 		for (const auto& installed : s_installed)
@@ -552,9 +535,24 @@ namespace
 		return {};
 	}
 
-	//////////////////////////////////////////////////////////////////////////
-	// The list
-	//////////////////////////////////////////////////////////////////////////
+	// "This Game" is a choice while a game runs, unless the page is already one game's (its list is
+	// that game's whichever filter is shown).
+	bool ThisGameFilterAvailable()
+	{
+		return s_filter_serial.empty() && !ContextSerial().empty();
+	}
+
+	std::vector<ListFilter> FilterChoices()
+	{
+		std::vector<ListFilter> choices;
+		choices.push_back(ListFilter::Popular);
+		choices.push_back(ListFilter::All);
+		if (ThisGameFilterAvailable())
+			choices.push_back(ListFilter::ThisGame);
+		choices.push_back(ListFilter::MyGames);
+		choices.push_back(ListFilter::Installed);
+		return choices;
+	}
 
 	void RebuildView()
 	{
@@ -607,6 +605,14 @@ namespace
 				for (size_t i = 0; i < s_packs.size(); i++)
 				{
 					if (wanted(s_packs[i]))
+						s_view.push_back(static_cast<u32>(i));
+				}
+				break;
+
+			case ListFilter::ThisGame:
+				for (size_t i = 0; i < s_packs.size(); i++)
+				{
+					if (wanted(s_packs[i]) && !context.empty() && s_packs[i].pack.MatchesSerial(context))
 						s_view.push_back(static_cast<u32>(i));
 				}
 				break;
@@ -743,10 +749,6 @@ namespace
 		}
 	}
 
-	//////////////////////////////////////////////////////////////////////////
-	// Workers
-	//////////////////////////////////////////////////////////////////////////
-
 	std::optional<u64> FreeSpaceAt(const std::string& directory)
 	{
 		// The textures folder may not exist yet; the drive it will be on does.
@@ -869,10 +871,6 @@ namespace
 		});
 	}
 
-	//////////////////////////////////////////////////////////////////////////
-	// Install progress: worker -> CPU thread -> GS thread, shown as a keyed notification
-	//////////////////////////////////////////////////////////////////////////
-
 	void ShowInstallNotice(const std::string& title, const std::string& text, float seconds)
 	{
 		if (!IsInitialized())
@@ -968,7 +966,7 @@ namespace
 		}
 	}
 
-	// The Cancel Install button. Does nothing once the pack is being put in place.
+	// Does nothing once the pack is being put in place.
 	void CancelInstall()
 	{
 		if (!s_install.active || !s_install.cancellable || s_install.cancelling)
@@ -1061,10 +1059,6 @@ namespace
 		});
 	}
 
-	//////////////////////////////////////////////////////////////////////////
-	// Drawing: rows
-	//////////////////////////////////////////////////////////////////////////
-
 	struct RowText
 	{
 		std::string title;
@@ -1077,7 +1071,7 @@ namespace
 	};
 
 	// One pack or installed-folder row: the name, two lines of facts under it, and the state on the
-	// right with a fact beneath it. The text is only built for a row that is on screen: the list is
+	// right with a fact beneath it. make_text runs only for a row that is on screen: the list is
 	// hundreds long.
 	template <typename MakeText>
 	bool DrawPackRow(const char* id, MakeText&& make_text)
@@ -1187,6 +1181,12 @@ namespace
 		const bool loading = s_catalog_worker.running.load() || s_fetch_deferred;
 
 		std::string heading = FilterName(s_filter);
+		if (s_filter == ListFilter::ThisGame)
+		{
+			const std::string game = s_current_game_title.empty() ? ContextSerial() : s_current_game_title;
+			if (!game.empty())
+				heading = fmt::format("{} - {}", heading, game);
+		}
 		if (s_catalog_loaded)
 			heading = fmt::format("{} ({})", heading, s_view.size());
 		MenuHeading(heading.c_str());
@@ -1210,6 +1210,14 @@ namespace
 			else if (s_filter == ListFilter::Popular && s_popular.empty())
 			{
 				NoticeRow(ICON_FA_CIRCLE_INFO, FSUI_STR("Nothing Yet"), FSUI_STR("Nothing has been downloaded yet today."));
+			}
+			else if (s_filter == ListFilter::ThisGame && ContextSerial().empty())
+			{
+				NoticeRow(ICON_FA_CIRCLE_INFO, FSUI_STR("No Game Running"), FSUI_STR("No game is running, so there is no game to show packs for."));
+			}
+			else if (s_filter == ListFilter::ThisGame)
+			{
+				NoticeRow(ICON_FA_CIRCLE_INFO, FSUI_STR("No Packs for This Game"), FSUI_STR("No texture packs are listed for this game yet."));
 			}
 			else if (s_filter == ListFilter::MyGames && s_library_serials.empty() && s_filter_serial.empty())
 			{
@@ -1312,10 +1320,6 @@ namespace
 		}
 	}
 
-	//////////////////////////////////////////////////////////////////////////
-	// Drawing: the pack window
-	//////////////////////////////////////////////////////////////////////////
-
 	// A fact on one line. Selecting copies it, which also lets a controller reach every row.
 	void InfoRow(const char* icon, const char* label, const std::string& value)
 	{
@@ -1382,7 +1386,6 @@ namespace
 		const Cat::TexturePack* pack = entry ? &entry->pack : nullptr;
 		const bool installing_this = s_install.active && pack && s_install.pack_id == pack->id;
 
-		// -- What can be done ---------------------------------------------------------------------
 		if (pack)
 		{
 			const Cat::InstallAction action = ActionOf(*pack);
@@ -1457,7 +1460,6 @@ namespace
 		if (!pack && !installed)
 			ImGui::SetItemDefaultFocus();
 
-		// -- Warnings -----------------------------------------------------------------------------
 		if (pack && pack->NeedsAstc() && s_astc == TPEngine::AstcSupport::Unsupported)
 		{
 			const std::string title = fmt::format("{} {}", ICON_FA_TRIANGLE_EXCLAMATION, FSUI_STR("This GPU Cannot Show These Textures"));
@@ -1477,7 +1479,6 @@ namespace
 			}
 		}
 
-		// -- The pack -----------------------------------------------------------------------------
 		if (pack)
 		{
 			MenuHeading(FSUI_CSTR("Pack"));
@@ -1529,7 +1530,6 @@ namespace
 				TextRow(ICON_FA_CIRCLE_INFO, FSUI_NSTR("Description"), pack->description);
 		}
 
-		// -- On this device -----------------------------------------------------------------------
 		if (installed)
 		{
 			MenuHeading(FSUI_CSTR("Installed"));
@@ -1618,10 +1618,6 @@ namespace
 		}
 	}
 
-	//////////////////////////////////////////////////////////////////////////
-	// Drawing: the page
-	//////////////////////////////////////////////////////////////////////////
-
 	bool CatalogStale()
 	{
 		return !s_catalog_loaded || (std::time(nullptr) - s_catalog_fetched_at) > std::chrono::duration_cast<std::chrono::seconds>(Cat::TexturePackCatalog::CACHE_MAX_AGE).count();
@@ -1645,8 +1641,15 @@ namespace
 
 		if (!s_opened_before)
 		{
-			// Where Android opens: the player's own games when a game is in context, else what is popular.
-			s_filter = !s_filter_serial.empty() ? ListFilter::All : (VMManager::HasValidVM() ? ListFilter::MyGames : ListFilter::Popular);
+			// Open on the game the player is in, else their own games, else what is popular.
+			if (!s_filter_serial.empty())
+				s_filter = ListFilter::All;
+			else if (ThisGameFilterAvailable())
+				s_filter = ListFilter::ThisGame;
+			else if (VMManager::HasValidVM())
+				s_filter = ListFilter::MyGames;
+			else
+				s_filter = ListFilter::Popular;
 			s_opened_before = true;
 		}
 		else if (!s_filter_serial.empty())
@@ -1712,17 +1715,19 @@ namespace
 
 	void DrawBrowseRows()
 	{
-		if (MenuButtonWithValue(FSUI_ICONSTR(ICON_FA_FILTER, "Show"),
-				FSUI_CSTR("Today's most downloaded packs, every pack, the packs for games in your library, or the ones you installed."),
-				FilterName(s_filter)))
+		const char* show_summary = FSUI_CSTR("Today's most downloaded packs, every pack, the packs for games in your library, or the ones you installed.");
+		if (ThisGameFilterAvailable())
+			show_summary = FSUI_CSTR("Today's most downloaded packs, every pack, the packs for the game you are playing, the packs for games in your library, or the ones you installed.");
+		if (MenuButtonWithValue(FSUI_ICONSTR(ICON_FA_FILTER, "Show"), show_summary, FilterName(s_filter)))
 		{
 			ImGuiFullscreen::ChoiceDialogOptions options;
-			for (const ListFilter filter : {ListFilter::Popular, ListFilter::All, ListFilter::MyGames, ListFilter::Installed})
+			const std::vector<ListFilter> choices = FilterChoices();
+			for (const ListFilter filter : choices)
 				options.emplace_back(FilterName(filter), filter == s_filter);
 
-			OpenChoiceDialog(FSUI_ICONSTR(ICON_FA_FILTER, "Show"), false, std::move(options), [](s32 index, const std::string& title, bool checked) {
-				if (index >= 0 && index <= static_cast<s32>(ListFilter::Installed))
-					SetFilter(static_cast<ListFilter>(index));
+			OpenChoiceDialog(FSUI_ICONSTR(ICON_FA_FILTER, "Show"), false, std::move(options), [choices](s32 index, const std::string& title, bool checked) {
+				if (index >= 0 && index < static_cast<s32>(choices.size()))
+					SetFilter(choices[static_cast<size_t>(index)]);
 				CloseChoiceDialog();
 			});
 		}
@@ -1830,10 +1835,8 @@ namespace
 		}
 	}
 
-	//////////////////////////////////////////////////////////////////////////
 	// Screenshot harness: a pack and a network, so an install can be drawn and run without downloading
 	// anything. Reached only through OpenTexturePacksForShot().
-	//////////////////////////////////////////////////////////////////////////
 
 	// Serves one local file slowly, as every download, or with no file stalls part way through a
 	// download until it is cancelled.
@@ -1955,10 +1958,6 @@ namespace
 	}
 } // namespace
 
-//////////////////////////////////////////////////////////////////////////
-// The page
-//////////////////////////////////////////////////////////////////////////
-
 void FullscreenUI::DrawTexturePacksSettingsPage()
 {
 	const int frame = ImGui::GetFrameCount();
@@ -1966,6 +1965,9 @@ void FullscreenUI::DrawTexturePacksSettingsPage()
 	s_last_draw_frame = frame;
 	if (opened)
 		OnPageOpened();
+	// The game's list goes away with the game.
+	if (s_filter == ListFilter::ThisGame && !ThisGameFilterAvailable())
+		SetFilter(VMManager::HasValidVM() ? ListFilter::MyGames : ListFilter::Popular);
 	if (s_dwell.Settled() && s_fetch_deferred)
 		OnPageSettled();
 
@@ -2074,10 +2076,6 @@ void FullscreenUI::ShutdownTexturePacks()
 	s_install_notice_up = false;
 	s_shot_action = ShotAction::None;
 }
-
-//////////////////////////////////////////////////////////////////////////
-// Screenshot harness
-//////////////////////////////////////////////////////////////////////////
 
 std::string FullscreenUI::TexturePacksShotVariants()
 {
@@ -2265,6 +2263,10 @@ TRANSLATE_NOOP("FullscreenUI", "Can't Reach the Download Counter");
 TRANSLATE_NOOP("FullscreenUI", "Can't reach the download counter right now. Choose All to see every pack.");
 TRANSLATE_NOOP("FullscreenUI", "Nothing Yet");
 TRANSLATE_NOOP("FullscreenUI", "Nothing has been downloaded yet today.");
+TRANSLATE_NOOP("FullscreenUI", "No Game Running");
+TRANSLATE_NOOP("FullscreenUI", "No game is running, so there is no game to show packs for.");
+TRANSLATE_NOOP("FullscreenUI", "No Packs for This Game");
+TRANSLATE_NOOP("FullscreenUI", "No texture packs are listed for this game yet.");
 TRANSLATE_NOOP("FullscreenUI", "No Games");
 TRANSLATE_NOOP("FullscreenUI", "There are no games in your library yet, so no pack can be matched to them.");
 TRANSLATE_NOOP("FullscreenUI", "No Packs Match");
@@ -2291,6 +2293,7 @@ TRANSLATE_NOOP("FullscreenUI", "ASTC Textures");
 TRANSLATE_NOOP("FullscreenUI", "The packs in the catalog are made of ASTC textures, a compressed format that phones, handhelds, Apple Silicon and Asahi GPUs read directly. Most desktop NVIDIA, AMD and Intel GPUs cannot, and the emulator skips ASTC replacement textures on a GPU that lacks it.\n\nA pack marked with a warning still downloads and installs, but it will not change how the game looks on this GPU.");
 TRANSLATE_NOOP("FullscreenUI", "Popular Today");
 TRANSLATE_NOOP("FullscreenUI", "All");
+TRANSLATE_NOOP("FullscreenUI", "This Game");
 TRANSLATE_NOOP("FullscreenUI", "My Games");
 TRANSLATE_NOOP("FullscreenUI", "Download");
 TRANSLATE_NOOP("FullscreenUI", "Update");
@@ -2304,6 +2307,7 @@ TRANSLATE_NOOP("FullscreenUI", "Cancelling...");
 TRANSLATE_NOOP("FullscreenUI", "Stops the install and throws away what was downloaded.");
 TRANSLATE_NOOP("FullscreenUI", "Too late to cancel: the pack is being put in place.");
 TRANSLATE_NOOP("FullscreenUI", "Today's most downloaded packs, every pack, the packs for games in your library, or the ones you installed.");
+TRANSLATE_NOOP("FullscreenUI", "Today's most downloaded packs, every pack, the packs for the game you are playing, the packs for games in your library, or the ones you installed.");
 TRANSLATE_NOOP("FullscreenUI", "Find a pack by its name, game, serial or creator.");
 TRANSLATE_NOOP("FullscreenUI", "Not set");
 TRANSLATE_NOOP("FullscreenUI", "Show All");
@@ -2326,6 +2330,7 @@ TRANSLATE_NOOP("FullscreenUI", "{} could not be removed completely.");
 TRANSLATE_NOOP("FullscreenUI", "{}. The textures are used the next time the game starts.");
 TRANSLATE_NOOP("FullscreenUI", "{} files");
 TRANSLATE_NOOP("FullscreenUI", "Delete {} for {}? This removes {} files ({}) from the textures folder. You can download the pack again later.");
+TRANSLATE_NOOP("FullscreenUI", "{} already has texture replacements that were not installed from the catalog. The existing folder is kept as {}<date and time> and no longer used. Install the pack?");
 TRANSLATE_NOOP("FullscreenUI", "Downloads {} and installs it for {}. Turns on texture replacement.");
 TRANSLATE_NOOP("FullscreenUI", "A newer version of this pack is available. Replaces the installed pack for {}.");
 TRANSLATE_NOOP("FullscreenUI", "It replaces {}, which is installed for this game.");
@@ -2360,11 +2365,10 @@ TRANSLATE_NOOP("FullscreenUI", "Files");
 TRANSLATE_NOOP("FullscreenUI", "Size on Disk");
 TRANSLATE_NOOP("FullscreenUI", "Folder");
 TRANSLATE_NOOP("FullscreenUI", "Delete Texture Pack");
-TRANSLATE_NOOP("FullscreenUI", "{} already has texture replacements that were not installed from the catalog. The existing folder is kept as {}<date and time> and no longer used. Install the pack?");
-TRANSLATE_NOOP("FullscreenUI", "Install Texture Pack");
-TRANSLATE_NOOP("FullscreenUI", "Install");
 TRANSLATE_NOOP("FullscreenUI", "Delete");
 TRANSLATE_NOOP("FullscreenUI", "Cancel");
+TRANSLATE_NOOP("FullscreenUI", "Install Texture Pack");
+TRANSLATE_NOOP("FullscreenUI", "Install");
 TRANSLATE_NOOP("FullscreenUI", "Close");
 TRANSLATE_NOOP("FullscreenUI", "Cancel Install");
 TRANSLATE_NOOP("FullscreenUI", "Show");

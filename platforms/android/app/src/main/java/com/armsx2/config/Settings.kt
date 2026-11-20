@@ -30,8 +30,10 @@ import org.json.JSONObject
  *   4. Surface a widget in the appropriate Settings tab.
  */
 /** One DEV9 internal-DNS host override: [url] resolves to [ip] when DNS mode = Internal.
- *  Used for private/fan servers (e.g. obsrv for RE Outbreak) that redirect specific hostnames. */
+ *  Used for private/fan servers (e.g. obsrv for RE Outbreak) that redirect specific hostnames.
+ *  [name] is the player's own label for the entry, the core's Desc. */
 data class Dev9HostMapping(
+    val name: String = "",
     val url: String = "",
     val ip: String = "0.0.0.0",
     val enabled: Boolean = true,
@@ -117,13 +119,20 @@ data class CpuSettings(
      *  so testers can A/B games which dislike MTVU. */
     val mtvu: Boolean = true,
     /** EmuCore/Speedhacks/iopThread — runs the IOP (the PS2's I/O processor: sound, disc, controllers
-     *  and memory cards) on its own thread beside the EE. Off by default. The core turns it back off by
-     *  itself on a device without spare performance cores, for PS1 games, arcade games and while an IOP
+     *  and memory cards) on its own thread beside the EE. This plain default is off; a new install and a Reset take
+     *  the device's (DeviceTier.iopThreadDefault: on where the performance tier is two or three cores), and an older
+     *  install is moved once (ConfigStore.migrateIopThreadNarrowTier). The game database turns it on for a few games
+     *  that need it (God of War, God of War II, Shadow of the Colossus). The core turns it off by itself on a device
+     *  with fewer than two performance cores or too few cores in total, for PS1 games, arcade games and while an IOP
      *  breakpoint is set, so the switch can stay on everywhere. */
     val iopThread: Boolean = false,
     /** EmuCore/Speedhacks/iopThreadLag — how many EE cycles the EE may run ahead of the IOP thread before
-     *  it waits for it. Advanced. The core clamps it to 4096..196608; keep the pickers inside that. */
-    val iopThreadLag: Int = 24576,
+     *  it waits for it. Advanced. The core clamps it to 4096..9830400 (two frames); keep the pickers inside that.
+     *  The default is one frame, 4915200 cycles (IopThread::kDefaultSettingLag in IopThreadMode.h); the core pulls
+     *  the bound back to 24576 by itself at the moments the EE is waiting on the IOP. A save that still holds the
+     *  old default, 24576, is moved to the new one once (ConfigStore.migrateIopThreadLag); any other saved value
+     *  stays as it was saved. */
+    val iopThreadLag: Int = 4915200,
     /** EmuCore/CPU/Recompiler/EnableVUAot — vu-aot, the VU1 ahead-of-time compiler. Programs that run often
      *  are recompiled in the background above microVU, and the compiled VU code is kept on disk (the VU
      *  program cache comes up with it) so the next launch starts with it. On by default. Turning it off
@@ -169,6 +178,9 @@ data class CpuSettings(
      *  signal handler). Disabling falls back to the slow VTLB read/write
      *  path on every memory op. */
     val enableFastmem: Boolean = true,
+    /** EmuCore/CPU/ExtraMemory — Extended RAM: 128MB EE and 8MB IOP memory, as on a development
+     *  console. Applied when a game boots or resets, not while it runs. */
+    val extraMemory: Boolean = false,
 
     // ---- macOS/PCSX2 ARM64 backend compatibility flags ----
     // Hidden from UI and forced on. Kept only so older JSON/INI/per-game blobs
@@ -274,6 +286,21 @@ data class AudioSettings(
      *  can't keep up even with NEON reverb; default off = full reverb. Applies
      *  live (read per-sample in MixCore). */
     val spu2LightweightMix: Boolean = false,
+
+    // ---- Microphone (emulated USB mic on port 0) ----
+    /** The microphone a singing game is given: 0 = Off, 1 = Standard (one microphone),
+     *  2 = SingStar (two singers, one microphone each). Emulated as the core's "singstar"
+     *  USB device; takes effect when a game starts. */
+    val micType: Int = 0,
+    /** Player 1's / the single microphone, a MicDevices name ("builtin", "usb:<product>", ...);
+     *  "Default" is the microphone Android picks (a USB one when plugged in). */
+    val micDevice1: String = "Default",
+    /** The second singer's microphone (SingStar only), same naming; empty = none. */
+    val micDevice2: String = "",
+    /** Input gain for the microphone, in decibels (0 = unity). The handheld's built-in mic is quieter than
+     *  the dynamic capsule SingStar games were tuned for, so a game may need its input boosted; takes
+     *  effect when a game starts. */
+    val micLevel: Int = 0,
 )
 
 /** Patches, cheats, boot options, RetroAchievements and the other EmuCore toggles. Part of [Settings]. */
@@ -383,6 +410,10 @@ data class DisplaySettings(
     val syncToHostRefresh: Boolean = false,
     /** EmuCore/GS/DisableFramebufferFetch — disable the framebuffer-fetch path. Default off. */
     val disableFramebufferFetch: Boolean = false,
+    /** EmuCore/GS/DisableSwapChainPreRotation — leave the screen's rotation to the compositor instead
+     *  of pre-rotating the Vulkan swap chain. Default off. For a surface that reports a rotation it
+     *  does not undo (issue #890). */
+    val disableSwapChainPreRotation: Boolean = false,
     /** EmuCore/GS/HWROV — Rasterizer Order Views (accurate blending via fragment-shader
      *  interlock; Vulkan only). Default OFF on mobile: it's a perf loss on tilers and is
      *  inert on Turnip/Adreno (no VK_EXT_fragment_shader_interlock), so on-by-default just
@@ -568,8 +599,10 @@ data class OutputSettings(
     val customAspectRatio: Float = 16f / 9f,
     /** Host graphics API: "auto" / "opengl" / "vulkan" / "software". Applied via
      *  the renderer JNI helpers on (re)launch; per-game so each title can pick its
-     *  own backend. Seeded from the legacy global "renderer" pref on first load. */
-    val renderer: String = "auto",
+     *  own backend. Seeded from the legacy global "renderer" pref on first load.
+     *  Vulkan by default; a new install on a device without Vulkan 1.1 starts on Auto
+     *  instead (ConfigStore.freshInstallSettings). Saved settings keep what they hold. */
+    val renderer: String = "vulkan",
     /** Internal resolution multiplier (0.25..5.0; 1.0 = native). Applied live via
      *  the GS upscale helper; per-game so each title keeps its own. Seeded from the
      *  legacy global "upscaleFloat" pref on first load. */
@@ -592,6 +625,15 @@ data class OutputSettings(
      *  clamshell controllers (Backbone-style) open the screen downward, so a centred image sits
      *  too low. Applied live via NativeApp.setLandscapeRenderTop; only affects a landscape window. */
     val landscapeRenderTop: Boolean = false,
+    /** Side-by-side VR for phone headsets (Cardboard and its copies): the game drawn once in each
+     *  half of the screen. [vrSize] sizes each picture within its half (30..100 %); [vrDistance]
+     *  moves the two pictures apart (+) or together (-), [vrHeight] down (+) or up (-), each as a
+     *  percentage of the room left around the pictures (-100..100). Applied live via
+     *  NativeApp.setSideBySideVR; the on-screen controls are hidden while it is on. */
+    val vrSideBySide: Boolean = false,
+    val vrSize: Int = 80,
+    val vrDistance: Int = 0,
+    val vrHeight: Int = 0,
     /** Auto Progressive Scan: hold Triangle+Cross on port 1 through the boot sequence, which is
      *  the real-console combo a number of PS2 titles probe to offer 480p progressive output
      *  (Tekken 4, several Criterion games). Purely a synthetic pad hold — no core setting — so it
@@ -804,9 +846,8 @@ data class GraphicsSettings(
     val precacheTextureReplacements: Boolean = false,
     /** EmuCore/GS/TextureUpscale — GSTextureUpscaleMode: 0 Off / 1 RAISR 2x / 2 RAISR 4x. The
      *  picker index is the enum value. Persisted as an integer by the core, so new modes get
-     *  appended, never renumbered. The core's first key for this was TextureUpscaleMode, whose
-     *  values meant something else; it is neither read nor written, and neither is the stored
-     *  JSON field of that name. */
+     *  appended, never renumbered. An older TextureUpscaleMode key had different values; it and
+     *  the stored JSON field of that name are neither read nor written. */
     val textureUpscale: Int = 0,
     /** EmuCore/GS/DumpReplaceableTextures. */
     val dumpReplaceableTextures: Boolean = false,
@@ -1001,6 +1042,16 @@ data class Settings(
         if (emitSink == null) NativeApp.setFrameSkip(frameLimit.frameSkip.coerceIn(0, 5))
         if (emitSink == null) NativeApp.setPortraitRenderTop(output.portraitRenderTop)
         if (emitSink == null) NativeApp.setLandscapeRenderTop(output.landscapeRenderTop)
+        if (emitSink == null) {
+            NativeApp.setSideBySideVR(output.vrSideBySide, output.vrSize.coerceIn(30, 100),
+                output.vrDistance.coerceIn(-100, 100), output.vrHeight.coerceIn(-100, 100))
+            // The on-screen pad hides while VR is on. TouchControls holds Compose state, so it is only
+            // ever created and touched on the main thread; applyTo can run on any thread.
+            val vr = output.vrSideBySide
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                com.armsx2.ui.touch.TouchControls.noteSideBySideVR(vr)
+            }
+        }
         // Audio (SPU2). Volume/mute are live native setters; the rest are written
         // to the base layer and applied on commit (SPU2 stream reconfigure).
         if (emitSink == null) NativeApp.setAudioVolume(audio.audioVolume.coerceIn(0, 200))
@@ -1046,8 +1097,11 @@ data class Settings(
         put("Achievements", "NotificationScale", "int", emuCore.achievements.notificationScale.coerceIn(50, 250).toString())
         // VMManager::ReloadPINE compares these against the live server and starts, stops or
         // rebinds it, so a commit is enough — no game restart.
-        put("EmuCore", "EnablePINE", "bool", emuCore.pineEnabled.toString())
-        put("EmuCore", "PINESlot", "int", emuCore.pineSlot.toString())
+        // A launch's extras (LaunchExtras) win for that launch; an exported per-game INI keeps the saved values.
+        val launchPine = if (emitSink == null) com.armsx2.LaunchExtras.pine else null
+        val launchPineSlot = if (emitSink == null) com.armsx2.LaunchExtras.pineSlot else null
+        put("EmuCore", "EnablePINE", "bool", (launchPine ?: emuCore.pineEnabled).toString())
+        put("EmuCore", "PINESlot", "int", (launchPineSlot ?: emuCore.pineSlot).toString())
         put("EmuCore", "EnableGameFixes", "bool", emuCore.enableGameFixes.toString())
         put("EmuCore/Gamefixes", "SoftwareRendererFMVHack", "bool", emuCore.gamefixSoftwareRendererFmv.toString())
         put("EmuCore/Gamefixes", "SkipMPEGHack", "bool", emuCore.gamefixSkipMpeg.toString())
@@ -1097,7 +1151,7 @@ data class Settings(
         put("DEV9/Eth/Hosts", "Count", "int", network.dev9EthHosts.size.toString())
         network.dev9EthHosts.forEachIndexed { i, h ->
             put("DEV9/Eth/Hosts/Host$i", "Url", "string", h.url)
-            put("DEV9/Eth/Hosts/Host$i", "Desc", "string", "ARMSX2")
+            put("DEV9/Eth/Hosts/Host$i", "Desc", "string", h.name)
             put("DEV9/Eth/Hosts/Host$i", "Address", "string", h.ip.ifEmpty { "0.0.0.0" })
             put("DEV9/Eth/Hosts/Host$i", "Enabled", "bool", h.enabled.toString())
         }
@@ -1111,11 +1165,34 @@ data class Settings(
         // the emulated HID keyboard on the next boot. The live attach/detach on a
         // running VM is NativeApp.usbApplyPorts below.
         //
-        // Port 1 is shared with the USB device picker (UsbDevices), so the switch owns it
-        // only while it is on. Off, the port carries what the picker put there. This used
-        // to write "None" instead, at every settings apply and every game launch, which
-        // unplugged a GunCon 2 or Buzz set on Port 1 before the game ever saw it.
-        put("USB1", "Type", "string", if (system.usbKeyboard) "hidkbd" else com.armsx2.input.UsbDevices.storedType(0))
+        // Port 0 is shared with the USB device picker (UsbDevices) and, while it is on,
+        // with the microphone in Audio settings: the keyboard switch owns it first, then
+        // the mic; off both, the port carries what the picker put there. The picker no
+        // longer offers "singstar" — the microphone lives in Audio settings (Microphone).
+        val micType = audio.micType.coerceIn(0, 2)
+        if (system.usbKeyboard) {
+            put("USB1", "Type", "string", "hidkbd")
+        } else if (micType != 0) {
+            // The emulated microphone: subtype 0 = SingStar (dual), 1 = Logitech (single).
+            // Device names are what MicDevices stores; the core opens them through Oboe.
+            put("USB1", "Type", "string", "singstar")
+            put("USB1", "singstar_subtype", "int", if (micType == 2) "0" else "1")
+            // Input gain in decibels: the core boosts what reaches the emulated microphone by this much.
+            put("USB1", "singstar_input_gain", "float", audio.micLevel.coerceIn(0, 24).toString())
+            if (micType == 2) {
+                put("USB1", "singstar_player1_device_name", "string", audio.micDevice1.ifEmpty { "Default" })
+                put("USB1", "singstar_player2_device_name", "string", audio.micDevice2)
+            } else {
+                put("USB1", "singstar_input_device_name", "string", audio.micDevice1.ifEmpty { "Default" })
+            }
+        } else {
+            // Off: leave whatever the picker put on port 0, unless that is the microphone. Before the
+            // Audio settings section existed the picker offered "singstar" and saved it; writing that
+            // back here would attach the microphone with the setting Off, and the next readFromIni
+            // would turn the setting on again.
+            val picked = com.armsx2.input.UsbDevices.storedType(0)
+            put("USB1", "Type", "string", if (picked == "singstar") com.armsx2.input.UsbDevices.NONE else picked)
+        }
         // Recompiler enables. Picked up by VMManager::ApplySettings →
         // SysCpuProviderPack rebind. Toggling these on a running VM swaps
         // the dispatch pointer; existing JIT block caches are flushed by
@@ -1125,6 +1202,7 @@ data class Settings(
         put("EmuCore/CPU/Recompiler", "EnableVU0", "bool", cpu.recVU0.toString())
         put("EmuCore/CPU/Recompiler", "EnableVU1", "bool", cpu.recVU1.toString())
         put("EmuCore/CPU/Recompiler", "EnableFastmem", "bool", cpu.enableFastmem.toString())
+        put("EmuCore/CPU", "ExtraMemory", "bool", cpu.extraMemory.toString())
         // Force the single macOS/PCSX2 ARM64 backend. VMManager also ignores
         // stale UseMac* values, but writing true cleans old persisted settings.
         put("EmuCore/CPU/Recompiler", "UseMacEE", "bool", "true")
@@ -1269,6 +1347,7 @@ data class Settings(
                 recVU0 = boolAt("EmuCore/CPU/Recompiler/EnableVU0") ?: this.cpu.recVU0,
                 recVU1 = boolAt("EmuCore/CPU/Recompiler/EnableVU1") ?: this.cpu.recVU1,
                 enableFastmem = boolAt("EmuCore/CPU/Recompiler/EnableFastmem") ?: this.cpu.enableFastmem,
+                extraMemory = boolAt("EmuCore/CPU/ExtraMemory") ?: this.cpu.extraMemory,
                 // Legacy/forced-on ARM64 backend flags — always "true" in the INI (mirror fromJson).
                 useMacEE = true,
                 useMacIOP = true,
@@ -1295,6 +1374,30 @@ data class Settings(
                 audioOpenSLES = boolAt("SPU2/Output/AndroidOpenSLES") ?: this.audio.audioOpenSLES,
                 audioRecordingCompatible = boolAt("SPU2/Output/AndroidRecordingCompatible") ?: this.audio.audioRecordingCompatible,
                 spu2LightweightMix = boolAt("SPU2/Output/LightweightMode") ?: this.audio.spu2LightweightMix,
+                // ---- Microphone (USB1/singstar) — 0 = Off, 1 = Standard, 2 = SingStar ----
+                // With the microphone off (or Standard, for the second singer) the INI holds no device
+                // or level for it, so keep the saved choice rather than resetting it to the default.
+                micType = strAt("USB1/Type")?.let { t ->
+                    when (t) {
+                        "singstar" -> if ((intAt("USB1/singstar_subtype") ?: 0) == 0) 2 else 1
+                        // The USB keyboard takes port 0 ahead of the microphone; keep the setting so the
+                        // microphone comes back when the keyboard is turned off.
+                        "hidkbd" -> this.audio.micType
+                        else -> 0
+                    }
+                } ?: this.audio.micType,
+                micDevice1 = strAt("USB1/Type")?.let { t ->
+                    if (t != "singstar") this.audio.micDevice1
+                    else if ((intAt("USB1/singstar_subtype") ?: 0) == 0) strAt("USB1/singstar_player1_device_name").orEmpty().ifEmpty { "Default" }
+                    else strAt("USB1/singstar_input_device_name").orEmpty().ifEmpty { "Default" }
+                } ?: this.audio.micDevice1,
+                micDevice2 = strAt("USB1/Type")?.let { t ->
+                    if (t != "singstar" || (intAt("USB1/singstar_subtype") ?: 0) != 0) this.audio.micDevice2
+                    else strAt("USB1/singstar_player2_device_name").orEmpty()
+                } ?: this.audio.micDevice2,
+                micLevel = strAt("USB1/Type")?.let { t ->
+                    if (t != "singstar") this.audio.micLevel else (floatAt("USB1/singstar_input_gain") ?: 0f).toInt().coerceIn(0, 24)
+                } ?: this.audio.micLevel,
             ),
             emuCore = this.emuCore.copy(
                 // ---- EmuCore patches / cheats ----
@@ -1355,6 +1458,7 @@ data class Settings(
                 disableInterlaceOffset = boolAt("EmuCore/GS/disable_interlace_offset") ?: this.display.disableInterlaceOffset,
                 syncToHostRefresh = boolAt("EmuCore/GS/SyncToHostRefreshRate") ?: this.display.syncToHostRefresh,
                 disableFramebufferFetch = boolAt("EmuCore/GS/DisableFramebufferFetch") ?: this.display.disableFramebufferFetch,
+                disableSwapChainPreRotation = boolAt("EmuCore/GS/DisableSwapChainPreRotation") ?: this.display.disableSwapChainPreRotation,
                 hwRov = boolAt("EmuCore/GS/HWROV") ?: this.display.hwRov,
                 hwAa1 = boolAt("EmuCore/GS/HWAA1") ?: this.display.hwAa1,
                 coalesceRenderPasses = boolAt("EmuCore/GS/CoalesceRenderPasses") ?: this.display.coalesceRenderPasses,
@@ -1481,12 +1585,14 @@ data class Settings(
                 dev9AutoGateway = boolAt("DEV9/Eth/AutoGateway") ?: this.network.dev9AutoGateway,
                 dev9ModeDns1 = strAt("DEV9/Eth/ModeDNS1") ?: this.network.dev9ModeDns1,
                 dev9ModeDns2 = strAt("DEV9/Eth/ModeDNS2") ?: this.network.dev9ModeDns2,
-                // Internal-DNS host overrides — Count gates Host{i} sections (Desc is ignored).
+                // Internal-DNS host overrides — Count gates Host{i} sections. "ARMSX2" is the
+                // Desc every entry was written with before entries had names, so it reads as none.
                 dev9EthHosts = run {
                 val count = intAt("DEV9/Eth/Hosts/Count") ?: return@run this.network.dev9EthHosts
                 (0 until count).mapNotNull { idx ->
                     val url = ini["DEV9/Eth/Hosts/Host$idx/Url"] ?: return@mapNotNull null
                     Dev9HostMapping(
+                        name = ini["DEV9/Eth/Hosts/Host$idx/Desc"].orEmpty().takeIf { it != "ARMSX2" }.orEmpty(),
                         url = url,
                         ip = (ini["DEV9/Eth/Hosts/Host$idx/Address"] ?: "0.0.0.0").ifEmpty { "0.0.0.0" },
                         enabled = boolAt("DEV9/Eth/Hosts/Host$idx/Enabled") ?: true,
@@ -1767,6 +1873,7 @@ data class Settings(
         put("EmuCore/GS", "disable_interlace_offset", "bool", display.disableInterlaceOffset.toString())
         put("EmuCore/GS", "SyncToHostRefreshRate", "bool", display.syncToHostRefresh.toString())
         put("EmuCore/GS", "DisableFramebufferFetch", "bool", display.disableFramebufferFetch.toString())
+        put("EmuCore/GS", "DisableSwapChainPreRotation", "bool", display.disableSwapChainPreRotation.toString())
         put("EmuCore/GS", "HWROV", "bool", display.hwRov.toString())
         put("EmuCore/GS", "HWAA1", "bool", display.hwAa1.toString())
         put("EmuCore/GS", "CoalesceRenderPasses", "bool", display.coalesceRenderPasses.toString())
@@ -1993,12 +2100,20 @@ data class Settings(
         put("audioOpenSLES", audio.audioOpenSLES)
         put("audioRecordingCompatible", audio.audioRecordingCompatible)
         put("spu2LightweightMix", audio.spu2LightweightMix)
+        put("micType", audio.micType)
+        put("micDevice1", audio.micDevice1)
+        put("micLevel", audio.micLevel)
+        put("micDevice2", audio.micDevice2)
         put("renderer", output.renderer)
         put("upscaleFloat", output.upscaleFloat.toDouble())
         put("customDriverId", output.customDriverId)
         put("orientation", output.orientation)
         put("portraitRenderTop", output.portraitRenderTop)
         put("landscapeRenderTop", output.landscapeRenderTop)
+        put("vrSideBySide", output.vrSideBySide)
+        put("vrSize", output.vrSize)
+        put("vrDistance", output.vrDistance)
+        put("vrHeight", output.vrHeight)
         put("autoProgressiveScan", output.autoProgressiveScan)
         put("affinityMode", output.affinityMode)
         put("framerateNtsc", output.framerateNtsc.toDouble())
@@ -2054,6 +2169,7 @@ data class Settings(
         put("disableInterlaceOffset", display.disableInterlaceOffset)
         put("syncToHostRefresh", display.syncToHostRefresh)
         put("disableFramebufferFetch", display.disableFramebufferFetch)
+        put("disableSwapChainPreRotation", display.disableSwapChainPreRotation)
         put("hwRov", display.hwRov)
         put("hwAa1", display.hwAa1)
         put("coalesceRenderPasses", display.coalesceRenderPasses)
@@ -2110,6 +2226,7 @@ data class Settings(
         put("dev9EthHosts", JSONArray().apply {
             network.dev9EthHosts.forEach { h ->
                 put(JSONObject().apply {
+                    put("name", h.name)
                     put("url", h.url)
                     put("ip", h.ip)
                     put("enabled", h.enabled)
@@ -2129,6 +2246,7 @@ data class Settings(
         put("recVU0", cpu.recVU0)
         put("recVU1", cpu.recVU1)
         put("enableFastmem", cpu.enableFastmem)
+        put("extraMemory", cpu.extraMemory)
         put("vu1InlineFmacStall", cpu.vu1InlineFmacStall)
         put("vu1CrossBlockPState", cpu.vu1CrossBlockPState)
         put("vu1InlineDrainTestPipes", cpu.vu1InlineDrainTestPipes)
@@ -2317,6 +2435,7 @@ data class Settings(
                     recVU0 = json.optBoolean("recVU0", def.cpu.recVU0),
                     recVU1 = json.optBoolean("recVU1", def.cpu.recVU1),
                     enableFastmem = json.optBoolean("enableFastmem", def.cpu.enableFastmem),
+                    extraMemory = json.optBoolean("extraMemory", def.cpu.extraMemory),
                     useMacEE = true,
                     useMacIOP = true,
                     useMacVU0 = true,
@@ -2344,6 +2463,10 @@ data class Settings(
                     audioOpenSLES = json.optBoolean("audioOpenSLES", def.audio.audioOpenSLES),
                     audioRecordingCompatible = json.optBoolean("audioRecordingCompatible", def.audio.audioRecordingCompatible),
                     spu2LightweightMix = json.optBoolean("spu2LightweightMix", def.audio.spu2LightweightMix),
+                    micType = json.optInt("micType", def.audio.micType),
+                    micDevice1 = json.optString("micDevice1", def.audio.micDevice1),
+                    micLevel = json.optInt("micLevel", def.audio.micLevel),
+                    micDevice2 = json.optString("micDevice2", def.audio.micDevice2),
                 ),
                 emuCore = EmuCoreSettings(
                     enablePatches = json.optBoolean("enablePatches", def.emuCore.enablePatches),
@@ -2401,6 +2524,7 @@ data class Settings(
                     disableInterlaceOffset = json.optBoolean("disableInterlaceOffset", def.display.disableInterlaceOffset),
                     syncToHostRefresh = json.optBoolean("syncToHostRefresh", def.display.syncToHostRefresh),
                     disableFramebufferFetch = json.optBoolean("disableFramebufferFetch", def.display.disableFramebufferFetch),
+                    disableSwapChainPreRotation = json.optBoolean("disableSwapChainPreRotation", def.display.disableSwapChainPreRotation),
                     hwRov = json.optBoolean("hwRov", def.display.hwRov),
                     hwAa1 = json.optBoolean("hwAa1", def.display.hwAa1),
                     hwAat = false,
@@ -2470,6 +2594,10 @@ data class Settings(
                     orientation = json.optInt("orientation", def.output.orientation),
                     portraitRenderTop = json.optBoolean("portraitRenderTop", def.output.portraitRenderTop),
                     landscapeRenderTop = json.optBoolean("landscapeRenderTop", def.output.landscapeRenderTop),
+                    vrSideBySide = json.optBoolean("vrSideBySide", def.output.vrSideBySide),
+                    vrSize = json.optInt("vrSize", def.output.vrSize).coerceIn(30, 100),
+                    vrDistance = json.optInt("vrDistance", def.output.vrDistance).coerceIn(-100, 100),
+                    vrHeight = json.optInt("vrHeight", def.output.vrHeight).coerceIn(-100, 100),
                     autoProgressiveScan = json.optBoolean("autoProgressiveScan", def.output.autoProgressiveScan),
                     affinityMode = json.optInt("affinityMode", def.output.affinityMode),
                     framerateNtsc = json.optDouble("framerateNtsc", def.output.framerateNtsc.toDouble()).toFloat(),
@@ -2510,6 +2638,7 @@ data class Settings(
                     (0 until arr.length()).mapNotNull { idx ->
                         arr.optJSONObject(idx)?.let { o ->
                             Dev9HostMapping(
+                                name = o.optString("name", ""),
                                 url = o.optString("url", ""),
                                 ip = o.optString("ip", "0.0.0.0").ifEmpty { "0.0.0.0" },
                                 enabled = o.optBoolean("enabled", true),
@@ -2631,12 +2760,20 @@ data class Settings(
             if (current.audio.audioOpenSLES != base.audio.audioOpenSLES) j.put("audioOpenSLES", current.audio.audioOpenSLES)
             if (current.audio.audioRecordingCompatible != base.audio.audioRecordingCompatible) j.put("audioRecordingCompatible", current.audio.audioRecordingCompatible)
             if (current.audio.spu2LightweightMix != base.audio.spu2LightweightMix) j.put("spu2LightweightMix", current.audio.spu2LightweightMix)
+            if (current.audio.micType != base.audio.micType) j.put("micType", current.audio.micType)
+            if (current.audio.micDevice1 != base.audio.micDevice1) j.put("micDevice1", current.audio.micDevice1)
+            if (current.audio.micLevel != base.audio.micLevel) j.put("micLevel", current.audio.micLevel)
+            if (current.audio.micDevice2 != base.audio.micDevice2) j.put("micDevice2", current.audio.micDevice2)
             if (current.output.renderer != base.output.renderer) j.put("renderer", current.output.renderer)
             if (current.output.upscaleFloat != base.output.upscaleFloat) j.put("upscaleFloat", current.output.upscaleFloat.toDouble())
             if (current.output.customDriverId != base.output.customDriverId) j.put("customDriverId", current.output.customDriverId)
             if (current.output.orientation != base.output.orientation) j.put("orientation", current.output.orientation)
             if (current.output.portraitRenderTop != base.output.portraitRenderTop) j.put("portraitRenderTop", current.output.portraitRenderTop)
             if (current.output.landscapeRenderTop != base.output.landscapeRenderTop) j.put("landscapeRenderTop", current.output.landscapeRenderTop)
+            if (current.output.vrSideBySide != base.output.vrSideBySide) j.put("vrSideBySide", current.output.vrSideBySide)
+            if (current.output.vrSize != base.output.vrSize) j.put("vrSize", current.output.vrSize)
+            if (current.output.vrDistance != base.output.vrDistance) j.put("vrDistance", current.output.vrDistance)
+            if (current.output.vrHeight != base.output.vrHeight) j.put("vrHeight", current.output.vrHeight)
             if (current.output.autoProgressiveScan != base.output.autoProgressiveScan) j.put("autoProgressiveScan", current.output.autoProgressiveScan)
             if (current.output.affinityMode != base.output.affinityMode) j.put("affinityMode", current.output.affinityMode)
             if (current.output.framerateNtsc != base.output.framerateNtsc) j.put("framerateNtsc", current.output.framerateNtsc.toDouble())
@@ -2690,6 +2827,7 @@ data class Settings(
             if (current.display.disableInterlaceOffset != base.display.disableInterlaceOffset) j.put("disableInterlaceOffset", current.display.disableInterlaceOffset)
             if (current.display.syncToHostRefresh    != base.display.syncToHostRefresh)    j.put("syncToHostRefresh", current.display.syncToHostRefresh)
             if (current.display.disableFramebufferFetch != base.display.disableFramebufferFetch) j.put("disableFramebufferFetch", current.display.disableFramebufferFetch)
+            if (current.display.disableSwapChainPreRotation != base.display.disableSwapChainPreRotation) j.put("disableSwapChainPreRotation", current.display.disableSwapChainPreRotation)
             if (current.display.hwRov != base.display.hwRov) j.put("hwRov", current.display.hwRov)
             if (current.display.hwAa1 != base.display.hwAa1) j.put("hwAa1", current.display.hwAa1)
             if (current.display.coalesceRenderPasses != base.display.coalesceRenderPasses) j.put("coalesceRenderPasses", current.display.coalesceRenderPasses)
@@ -2747,6 +2885,7 @@ data class Settings(
                 j.put("dev9EthHosts", JSONArray().apply {
                     current.network.dev9EthHosts.forEach { host ->
                         put(JSONObject().apply {
+                            put("name", host.name)
                             put("url", host.url)
                             put("ip", host.ip)
                             put("enabled", host.enabled)
@@ -2767,6 +2906,7 @@ data class Settings(
             if (current.cpu.recVU0              != base.cpu.recVU0)              j.put("recVU0", current.cpu.recVU0)
             if (current.cpu.recVU1              != base.cpu.recVU1)              j.put("recVU1", current.cpu.recVU1)
             if (current.cpu.enableFastmem       != base.cpu.enableFastmem)       j.put("enableFastmem", current.cpu.enableFastmem)
+            if (current.cpu.extraMemory         != base.cpu.extraMemory)         j.put("extraMemory", current.cpu.extraMemory)
             if (current.cpu.vu1InlineFmacStall  != base.cpu.vu1InlineFmacStall)  j.put("vu1InlineFmacStall", current.cpu.vu1InlineFmacStall)
             if (current.cpu.vu1CrossBlockPState != base.cpu.vu1CrossBlockPState) j.put("vu1CrossBlockPState", current.cpu.vu1CrossBlockPState)
             if (current.cpu.vu1InlineDrainTestPipes != base.cpu.vu1InlineDrainTestPipes) j.put("vu1InlineDrainTestPipes", current.cpu.vu1InlineDrainTestPipes)
@@ -2882,6 +3022,7 @@ data class Settings(
                 recVU0 = if (overrides.has("recVU0")) overrides.getBoolean("recVU0") else base.cpu.recVU0,
                 recVU1 = if (overrides.has("recVU1")) overrides.getBoolean("recVU1") else base.cpu.recVU1,
                 enableFastmem = if (overrides.has("enableFastmem")) overrides.getBoolean("enableFastmem") else base.cpu.enableFastmem,
+                extraMemory = if (overrides.has("extraMemory")) overrides.getBoolean("extraMemory") else base.cpu.extraMemory,
                 useMacEE = true,
                 useMacIOP = true,
                 useMacVU0 = true,
@@ -2909,6 +3050,10 @@ data class Settings(
                 audioOpenSLES = if (overrides.has("audioOpenSLES")) overrides.getBoolean("audioOpenSLES") else base.audio.audioOpenSLES,
                 audioRecordingCompatible = if (overrides.has("audioRecordingCompatible")) overrides.getBoolean("audioRecordingCompatible") else base.audio.audioRecordingCompatible,
                 spu2LightweightMix = if (overrides.has("spu2LightweightMix")) overrides.getBoolean("spu2LightweightMix") else base.audio.spu2LightweightMix,
+                micType = if (overrides.has("micType")) overrides.getInt("micType") else base.audio.micType,
+                micDevice1 = if (overrides.has("micDevice1")) overrides.getString("micDevice1") else base.audio.micDevice1,
+                micLevel = if (overrides.has("micLevel")) overrides.getInt("micLevel") else base.audio.micLevel,
+                micDevice2 = if (overrides.has("micDevice2")) overrides.getString("micDevice2") else base.audio.micDevice2,
             ),
             emuCore = EmuCoreSettings(
                 enablePatches = if (overrides.has("enablePatches")) overrides.getBoolean("enablePatches") else base.emuCore.enablePatches,
@@ -2971,6 +3116,7 @@ data class Settings(
                 disableInterlaceOffset = if (overrides.has("disableInterlaceOffset")) overrides.getBoolean("disableInterlaceOffset") else base.display.disableInterlaceOffset,
                 syncToHostRefresh = if (overrides.has("syncToHostRefresh")) overrides.getBoolean("syncToHostRefresh") else base.display.syncToHostRefresh,
                 disableFramebufferFetch = if (overrides.has("disableFramebufferFetch")) overrides.getBoolean("disableFramebufferFetch") else base.display.disableFramebufferFetch,
+                disableSwapChainPreRotation = if (overrides.has("disableSwapChainPreRotation")) overrides.getBoolean("disableSwapChainPreRotation") else base.display.disableSwapChainPreRotation,
                 hwRov = if (overrides.has("hwRov")) overrides.getBoolean("hwRov") else base.display.hwRov,
                 hwAa1 = if (overrides.has("hwAa1")) overrides.getBoolean("hwAa1") else base.display.hwAa1,
                 hwAat = false,
@@ -3041,6 +3187,10 @@ data class Settings(
                 orientation = if (overrides.has("orientation")) overrides.getInt("orientation") else base.output.orientation,
                 portraitRenderTop = if (overrides.has("portraitRenderTop")) overrides.getBoolean("portraitRenderTop") else base.output.portraitRenderTop,
                 landscapeRenderTop = if (overrides.has("landscapeRenderTop")) overrides.getBoolean("landscapeRenderTop") else base.output.landscapeRenderTop,
+                vrSideBySide = if (overrides.has("vrSideBySide")) overrides.getBoolean("vrSideBySide") else base.output.vrSideBySide,
+                vrSize = if (overrides.has("vrSize")) overrides.getInt("vrSize").coerceIn(30, 100) else base.output.vrSize,
+                vrDistance = if (overrides.has("vrDistance")) overrides.getInt("vrDistance").coerceIn(-100, 100) else base.output.vrDistance,
+                vrHeight = if (overrides.has("vrHeight")) overrides.getInt("vrHeight").coerceIn(-100, 100) else base.output.vrHeight,
                 autoProgressiveScan = if (overrides.has("autoProgressiveScan")) overrides.getBoolean("autoProgressiveScan") else base.output.autoProgressiveScan,
                 affinityMode = if (overrides.has("affinityMode")) overrides.getInt("affinityMode") else base.output.affinityMode,
                 framerateNtsc = if (overrides.has("framerateNtsc")) overrides.getDouble("framerateNtsc").toFloat() else base.output.framerateNtsc,
@@ -3084,6 +3234,7 @@ data class Settings(
                             array.optJSONObject(index)?.let { host ->
                                 add(
                                     Dev9HostMapping(
+                                        name = host.optString("name"),
                                         url = host.optString("url"),
                                         ip = host.optString("ip", "0.0.0.0"),
                                         enabled = host.optBoolean("enabled", true),

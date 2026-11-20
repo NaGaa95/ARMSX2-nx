@@ -5,8 +5,7 @@
 
 // The driver report written beside every GS dump as `<dump>.driver.json`: which GPU driver served
 // the game, what it reports about itself, what ARMSX2's driver profile decided for it and which
-// roads the renderer took, plus the device, build and GPU kernel driver. A dump says what the game
-// drew; this says what drew it.
+// roads the renderer took, plus the device, build and GPU kernel driver.
 //
 // Collected from the live renderer, so the served driver is the one that rendered the dump. Never
 // fails the dump: a failed check is logged in the report's "steps" and the rest is still written.
@@ -15,6 +14,7 @@
 #include "GS/Renderers/Common/GSDevice.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace GSDriverReport
@@ -53,6 +53,16 @@ namespace GSDriverReport
 	/// thread with a deadline, so a node that blocks costs the report its section, not the dump.
 	void WriteSidecarForDump(const std::string& dump_base);
 
-	/// The sidecar's path for a dump base name.
+	/// Collects the same report with no dump behind it and writes it to `path`. Needs no game and no
+	/// renderer: the device, driver pack, kernel and vendor library sections come from the system,
+	/// and the renderer sections are left empty with their steps recording why.
+	///
+	/// Only the device and renderer sections read GS-thread state, so only they run on the GS thread:
+	/// `run_on_gs_thread` is called once with the work to run there and must run it to completion
+	/// before returning (pass an empty function when no renderer is open). The slow part, the file
+	/// system and kernel checks, which can take seconds on a cold cache, runs on the calling thread
+	/// and never holds the GS thread. Returns false when the file cannot be written.
+	bool WriteStandaloneReport(const std::string& path, const std::function<void(const std::function<void()>&)>& run_on_gs_thread);
+
 	std::string SidecarPath(const std::string& dump_base);
 } // namespace GSDriverReport

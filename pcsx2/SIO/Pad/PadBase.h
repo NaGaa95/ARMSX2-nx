@@ -10,6 +10,11 @@
 
 #include <array>
 
+namespace PadScript
+{
+	struct PadFrame;
+}
+
 class PadBase
 {
 public:
@@ -22,8 +27,8 @@ public:
 
 protected:
 	// The pad input fields (this array, `buttons`, `analogs`, `dial` and `whammy` in the pad types) are written by the
-	// host thread at vsync and read by the IOP's SIO2 pad commands, which run on the IOP thread when there is one
-	// (IOP thread design 8.4). They are relaxed atomics: the same ldr and str as a plain field.
+	// host thread at vsync and read by the IOP's SIO2 pad commands, which run on the IOP thread when there is one.
+	// They are relaxed atomics: the same ldr and str as a plain field.
 	std::array<SharedWord::Relaxed<u8>, 32> rawInputs = {};
 	u8 unifiedSlot;
 	bool isInConfig = false;
@@ -63,6 +68,12 @@ public: // Public members
 	virtual u8 GetPressure(u32 index) const = 0;
 	virtual bool IsAnalogLightEnabled() const = 0;
 	virtual bool IsAnalogLocked() const = 0;
+
+	/// The player's own input, whether or not the pad is held. False for a pad type that cannot be held.
+	virtual bool CapturePlayerInput(PadScript::PadFrame* out) const { return false; }
+	/// From now on the game reads `state` instead of the player's input; nullptr gives the player's input back.
+	/// Called where the IOP runs (see PadScript.h). A pad type that cannot be held ignores it.
+	virtual void SetHeldInput(const PadScript::PadFrame* state) {}
 
 	virtual bool Freeze(StateWrapper& sw);
 

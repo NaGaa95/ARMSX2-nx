@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 ARMSX2 Contributors
 // SPDX-License-Identifier: GPL-3.0+
 
-// The EE-to-IOP queue in Lockstep (IOP thread design sections 3.4.2 and 6.2): the EE's blanking, its IRQ to the
+// The EE-to-IOP queue in Lockstep: the EE's blanking, its IRQ to the
 // IOP and its once-a-frame jobs become items stamped with the EE's cycle, and the IOP thread applies each before
 // the EE goes on, so each takes effect at the point of the EE's execution where Off made the direct call.
 //
@@ -20,8 +20,6 @@
 
 using namespace iopt;
 
-// ---------------------------------------------------------------- the EE-to-IOP queue in Lockstep
-
 TEST(IopThreadE2I, EveryKindIsMappedToItsAction)
 {
 	std::vector<Applied> seen;
@@ -31,9 +29,10 @@ TEST(IopThreadE2I, EveryKindIsMappedToItsAction)
 		IopThread::ApplyE2IItem(IopThread::E2IItem{0, kind, 0, 0}, kRecordingActions);
 	IopThread::ApplyE2IItem(IopThread::E2IItem{0, IopThread::E2IKind::IopIrq, 0, 7}, kRecordingActions);
 	IopThread::ApplyE2IItem(IopThread::E2IItem{0, IopThread::E2IKind::Call, 0, IopThread::E2IJob::MemcardBusyTick}, kRecordingActions);
+	IopThread::ApplyE2IItem(IopThread::E2IItem{0, IopThread::E2IKind::SifPump, 0, 1}, kRecordingActions);
 	s_seen = nullptr;
 
-	ASSERT_EQ(seen.size(), 6u);
+	ASSERT_EQ(seen.size(), 7u);
 	EXPECT_STREQ(seen[0].what, "hblank_start");
 	EXPECT_STREQ(seen[1].what, "hblank_end");
 	EXPECT_STREQ(seen[2].what, "vblank_start");
@@ -42,13 +41,15 @@ TEST(IopThreadE2I, EveryKindIsMappedToItsAction)
 	EXPECT_EQ(seen[4].arg, 7u);
 	EXPECT_STREQ(seen[5].what, "job");
 	EXPECT_EQ(seen[5].arg, IopThread::E2IJob::MemcardBusyTick);
+	EXPECT_STREQ(seen[6].what, "sif_pump");
+	EXPECT_EQ(seen[6].arg, 1u);
 }
 
 TEST(IopThreadE2I, TheKindsAndJobsHaveDistinctValues)
 {
 	// The numbers are what the queue carries; two kinds sharing one would apply the wrong function.
 	const u16 kinds[] = {IopThread::E2IKind::HBlankStart, IopThread::E2IKind::HBlankEnd, IopThread::E2IKind::VBlankStart,
-		IopThread::E2IKind::VBlankEnd, IopThread::E2IKind::IopIrq, IopThread::E2IKind::Call};
+		IopThread::E2IKind::VBlankEnd, IopThread::E2IKind::IopIrq, IopThread::E2IKind::Call, IopThread::E2IKind::SifPump};
 	for (size_t i = 0; i < std::size(kinds); i++)
 		for (size_t j = i + 1; j < std::size(kinds); j++)
 			EXPECT_NE(kinds[i], kinds[j]);
@@ -113,6 +114,66 @@ TEST(IopThreadE2I, TheIrqAndTheVsyncPatchesGoThroughTheQueueToo)
 		EXPECT_NE(s.thread, std::this_thread::get_id());
 }
 
+TEST(IopThreadE2I, LockstepDefersNothingUnlessTheSettingIsOn)
+{
+	REQUIRE_ARM64_HOST();
+	SettingsGuard guard;
+	StartLockstep();
+	ASSERT_TRUE(IopThread::LockstepActive());
+	Recorder recorder;
+
+	EmuConfig.Speedhacks.iopThreadDeferSif = false;
+	EXPECT_FALSE(IopThread::DeferSifPump(0)) << "the caller runs the pump itself, holding the IOP, as Off does";
+	EXPECT_FALSE(IopThread::DeferSifPump(1));
+	EXPECT_TRUE(recorder.Items().empty());
+}
+
+TEST(IopThreadE2I, LockstepWithTheSettingOnAppliesTheSifPumpItemAtOnceOnTheIopThreadInOrder)
+{
+	REQUIRE_ARM64_HOST();
+	SettingsGuard guard;
+	StartLockstep();
+	ASSERT_TRUE(IopThread::LockstepActive());
+	Recorder recorder;
+	EmuConfig.Speedhacks.iopThreadDeferSif = true;
+
+	IopBridge::HBlankStart<IopThreadMode::Lockstep>();
+	EXPECT_TRUE(IopThread::DeferSifPump(0));
+	IopBridge::HBlankEnd<IopThreadMode::Lockstep>();
+	EXPECT_TRUE(IopThread::DeferSifPump(1));
+
+	// Applied by the time each call returned (Off's order), on the IOP thread, between the items around it.
+	const auto& seen = recorder.Items();
+	ASSERT_EQ(seen.size(), 4u);
+	EXPECT_STREQ(seen[0].what, "hblank_start");
+	EXPECT_STREQ(seen[1].what, "sif_pump");
+	EXPECT_EQ(seen[1].arg, 0u);
+	EXPECT_STREQ(seen[2].what, "hblank_end");
+	EXPECT_STREQ(seen[3].what, "sif_pump");
+	EXPECT_EQ(seen[3].arg, 1u);
+	for (const Applied& s : seen)
+		EXPECT_NE(s.thread, std::this_thread::get_id());
+}
+
+TEST(IopThreadE2I, NothingIsDeferredWithNoThreadOrWhileTheIopIsHeld)
+{
+	REQUIRE_ARM64_HOST();
+	SettingsGuard guard;
+	EmuConfig.Speedhacks.iopThreadDeferSif = true;
+	EXPECT_FALSE(IopThread::DeferSifPump(0)) << "Off";
+
+	StartLockstep();
+	ASSERT_TRUE(IopThread::LockstepActive());
+	Recorder recorder;
+	{
+		IopThread::VmHold hold(IopThread::HoldKind::Emulation);
+		EXPECT_FALSE(IopThread::DeferSifPump(1)) << "a hold has stopped the IOP: the pump runs in place";
+	}
+	EXPECT_TRUE(recorder.Items().empty());
+	EXPECT_TRUE(IopThread::DeferSifPump(1));
+	EXPECT_EQ(recorder.Items().size(), 1u);
+}
+
 TEST(IopThreadE2I, AnItemIsAppliedAtThePointOfThePostNotLater)
 {
 	REQUIRE_ARM64_HOST();
@@ -133,6 +194,7 @@ TEST(IopThreadE2I, AnItemIsAppliedAtThePointOfThePostNotLater)
 		[] { s_order->push_back(3); },
 		[] {},
 		[] {},
+		[](u32) {},
 		[](u32) {},
 		[](u32) {},
 	};
@@ -214,7 +276,6 @@ TEST(IopThreadE2I, LockstepLeavesTheIopWhereOffDoesForTheRealFunctions)
 	REQUIRE_ARM64_HOST();
 	SettingsGuard guard;
 
-	// Off.
 	IopThread::ChooseMode();
 	u32 off_istat;
 	bool off_h_after_start, off_h_after_end;
@@ -229,7 +290,6 @@ TEST(IopThreadE2I, LockstepLeavesTheIopWhereOffDoesForTheRealFunctions)
 		off_istat = psxHu32(HW_ISTAT);
 	}
 
-	// Lockstep: the same calls, applied by the IOP thread.
 	StartLockstep();
 	ASSERT_TRUE(IopThread::LockstepActive());
 	u32 lock_istat;
@@ -263,9 +323,6 @@ TEST(IopThreadE2I, TheCountersCallTheInstanceOfTheMode)
 	EXPECT_NE(reinterpret_cast<void*>(&rcntUpdate_vSync<IopThreadMode::Off>),
 		reinterpret_cast<void*>(&rcntUpdate_vSync<IopThreadMode::Lockstep>));
 }
-
-
-// ---------------------------------------------------------------- the event test drives its own mode's blanking
 
 #ifdef PCSX2_RECOMPILER_TESTS
 namespace

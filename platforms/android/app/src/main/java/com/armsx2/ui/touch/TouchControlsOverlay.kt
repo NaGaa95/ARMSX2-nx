@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -275,7 +276,7 @@ fun TouchControlsOverlay() {
             }
         }
 
-        val showPad = edit || (visMode != 0 && TouchControls.visible.value)
+        val showPad = edit || TouchControls.padShown()
         if (!showPad) return@BoxWithConstraints
 
         if (edit) {
@@ -746,10 +747,9 @@ private val SHOULDER_IDS = listOf(TouchButtonId.L1, TouchButtonId.R1, TouchButto
  * Height factor of each shoulder button's box while Tight shoulder buttons is on, else empty.
  *
  * Every widget is a square of its size, and with multi-touch on a button also answers anywhere in a
- * circle 1.24 times as wide. L1/R1's sprite is only 0.58 of its width tall, so those reached far
- * above and below the button and got in the way (a request pointing at NetherSX2, which keeps the
- * touch area to the button). With the option on, a shoulder's widget box, touch area and the
- * regions other layers leave to it are all its artwork's box.
+ * circle 1.24 times as wide. L1/R1's sprite is only 0.58 of its width tall, so those reach far
+ * above and below the button and get in the way. With the option on, a shoulder's widget box,
+ * touch area and the regions other layers leave to it are all its artwork's box.
  */
 @Composable
 private fun tightShoulderFactors(): Map<TouchButtonId, Float> {
@@ -904,8 +904,8 @@ private fun UnifiedTouchLayer(
     // DOWN whose position lands inside one of these rects (defensive, in case the
     // above-layer consume ever races), so a tap on the stick / Pause can't leak
     // into a face button.
-    // Only widgets on screen: the square of a hidden extra analog button or GunCon 2 button was a
-    // dead spot for everything this layer drives, the D-pad included (#796).
+    // Only widgets on screen: the square of a hidden extra analog or GunCon 2 button would be a
+    // dead spot for everything this layer drives, the D-pad included.
     val foreignRects = layout.buttons.filter { cfg ->
         cfg.enabled && extraShown(cfg, gunAttached) && cfg.id.kind != TouchButtonId.Kind.DPAD &&
             (!isUnifiedKind(cfg.id.kind) || cfg.tapToHold)
@@ -1158,9 +1158,9 @@ private fun UnifiedTouchLayer(
                             val aggDir = current.keys.fold(DpadState()) { acc, f -> acc or dirContribution(f) }
                             // P½ re-sends every held pressure button at its new strength as it goes
                             // down or up, so what lets go goes first, then P½, then what presses.
-                            // The other way round, lifting "hold Square, slide onto P½" in Follow let
-                            // P½ go first and put Square back at full pressure for an instant on its
-                            // way up; and a button pressed along with P½ started at full.
+                            // In any other order, lifting "hold Square, slide onto P½" in Follow lets
+                            // P½ go first and puts Square back at full pressure for an instant, and a
+                            // button pressed along with P½ starts at full.
                             val released = pressed - agg
                             val added = agg - pressed
                             released.filterNot(::isPressure).forEach { glidePress(it, false) }
@@ -1239,8 +1239,11 @@ private fun PauseWidget(cfg: TouchButtonCfg, edit: Boolean) {
     } else {
         val opacity = TouchControls.opacity.floatValue
         // Drawn unless the user picked tap-to-reveal, or disabled the widget outright — a disabled
-        // pause is treated as hidden-but-tappable rather than gone, so it can't strand you.
-        val alwaysVisible = cfg.enabled && !TouchControls.pauseTapToReveal.value
+        // pause is treated as hidden-but-tappable rather than gone, so it can't strand you. Also
+        // not drawn while a gamepad is attached: its Back button opens the menu, and the glyph is
+        // only in the way. The corner still answers a tap or long-press either way.
+        val alwaysVisible = cfg.enabled && !TouchControls.pauseTapToReveal.value &&
+            !TouchControls.gamepadConnected.value
         var revealed by remember { mutableStateOf(false) }
         LaunchedEffect(revealed) {
             if (revealed) {
@@ -1908,13 +1911,15 @@ private fun StickWidget(cfg: TouchButtonCfg, edit: Boolean) {
                         val o = origin.value!!
                         val dx = tracked.position.x - o.x
                         val dy = tracked.position.y - o.y
+                        // Full tilt at the chosen travel (TouchControls.stickTravelPercent of the
+                        // cap); the thumb art is scaled to that, so it meets the ring's edge exactly
+                        // at full tilt whatever the travel.
+                        val travelPx = capPx * TouchControls.stickTravelPercent.intValue / 100f
                         val r = hypot(dx, dy)
-                        val scale = if (r > capPx) capPx / r else 1f
-                        val capDx = dx * scale
-                        val capDy = dy * scale
-                        thumb.value = Offset(capDx, capDy)
-                        var nx = (capDx / capPx).coerceIn(-1f, 1f)
-                        var ny = (capDy / capPx).coerceIn(-1f, 1f)
+                        val scale = if (r > travelPx) travelPx / r else 1f
+                        var nx = (dx * scale / travelPx).coerceIn(-1f, 1f)
+                        var ny = (dy * scale / travelPx).coerceIn(-1f, 1f)
+                        thumb.value = Offset(nx * capPx, ny * capPx)
                         // Honor the per-stick axis correction (swap first, then inverts)
                         // exactly like the physical-pad path (MainActivityRuntime.dispatchStick) — the
                         // tester's "Right Stick Invert Y works on a gamepad but the touch
@@ -1991,10 +1996,7 @@ private fun StickWidget(cfg: TouchButtonCfg, edit: Boolean) {
             alpha = opacity,
             modifier = Modifier
                 .fillMaxSize()
-                .offset(
-                    x = with(density) { baseShift.value.x.toDp() },
-                    y = with(density) { baseShift.value.y.toDp() },
-                ),
+                .stickShift { baseShift.value },
         )
         val thumbSizeDp = cfg.sizeDp * 0.62f
         Image(
@@ -2005,10 +2007,7 @@ private fun StickWidget(cfg: TouchButtonCfg, edit: Boolean) {
             alpha = opacity,
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(
-                    x = with(density) { (baseShift.value.x + thumb.value.x).toDp() },
-                    y = with(density) { (baseShift.value.y + thumb.value.y).toDp() },
-                )
+                .stickShift { baseShift.value + thumb.value }
                 .size(thumbSizeDp.dp),
         )
         // The extra analog button is no longer drawn here — it is its own widget (AnalogExtraWidget)
@@ -2018,6 +2017,15 @@ private fun StickWidget(cfg: TouchButtonCfg, edit: Boolean) {
         // handler ever sees it.
         if (edit) EditAdornment(cfg.id)
     }
+}
+
+/** Moves this element by [px], in whole pixels as a layout offset would. [px] is read in the layer
+ *  block and a translation is a property of the element's own render node, so a stick drag moves
+ *  it without recomposing the widget or re-recording the window's display list on every event. */
+private fun Modifier.stickShift(px: () -> Offset): Modifier = graphicsLayer {
+    val shift = px()
+    translationX = shift.x.roundToInt().toFloat()
+    translationY = shift.y.roundToInt().toFloat()
 }
 
 /* -------------------------------------------------------------------- */
@@ -2302,10 +2310,12 @@ private class HalfStickInputNode(private var params: HalfStickParams) : Modifier
             val leftStick = t.leftHalf
             val dx = ch.position.x - t.origin.x
             val dy = ch.position.y - t.origin.y
+            // Full tilt at the chosen travel, as on the on-screen sticks.
+            val travelPx = p.capPx * TouchControls.stickTravelPercent.intValue / 100f
             val r = hypot(dx, dy)
-            val scale = if (r > p.capPx) p.capPx / r else 1f
-            var nx = ((dx * scale) / p.capPx).coerceIn(-1f, 1f)
-            var ny = ((dy * scale) / p.capPx).coerceIn(-1f, 1f)
+            val scale = if (r > travelPx) travelPx / r else 1f
+            var nx = ((dx * scale) / travelPx).coerceIn(-1f, 1f)
+            var ny = ((dy * scale) / travelPx).coerceIn(-1f, 1f)
             if (ControllerMappings.stickSwapXY(leftStick)) { val tmp = nx; nx = ny; ny = tmp }
             if (ControllerMappings.stickInvertX(leftStick)) nx = -nx
             if (ControllerMappings.stickInvertY(leftStick)) ny = -ny
@@ -2379,13 +2389,12 @@ private fun isUnifiedKind(kind: TouchButtonId.Kind): Boolean =
     isMultiTouchKind(kind) || isGlideTargetKind(kind)
 
 /**
- * Whether one of the widgets every layout carries, enabled, is in use: the GunCon 2's buttons only
- * while a gun is attached, the extra analog button only while its Pad-settings toggle is on (one switch,
- * where players look for it; the layout entry only says where it sits and how big it is, so the editor
- * shows it whenever the toggle is on). Any other widget: true, its own enabled flag decides. The widget
- * loop and the touch layers ask the same question. A layer that kept out of the square of a widget that
- * is not on screen left a dead spot there, under whatever the player put on it (#796: the extra button's
- * spot, 0.10 / 0.34, sat on the D-pad once the D-pad joined the multi-touch layer).
+ * Whether a widget that every layout carries is on screen: the GunCon 2's buttons only while a gun
+ * is attached, the extra analog button only while its Pad-settings toggle is on (the layout entry
+ * only says where it sits and how big it is, so the editor shows it whenever the toggle is on). Any
+ * other widget: true, its own enabled flag decides. The widget loop and the touch layers all ask
+ * this, so no layer keeps out of the square of a widget that is not on screen; that square would
+ * be a dead spot under whatever the player put there.
  */
 private fun extraShown(cfg: TouchButtonCfg, gunAttached: Boolean): Boolean = when {
     cfg.id.kind == TouchButtonId.Kind.GUN -> gunAttached

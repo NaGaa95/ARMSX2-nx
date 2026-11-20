@@ -42,6 +42,7 @@
 #include "Recording/InputRecordingControls.h"
 #include "SIO/Memcard/MemoryCardFile.h"
 #include "SIO/Pad/Pad.h"
+#include "SIO/Pad/PadScript.h"
 #include "SIO/Sio.h"
 #include "SIO/Sio0.h"
 #include "SIO/Sio2.h"
@@ -724,6 +725,53 @@ bool VMManager::Internal::CheckSettingsVersion()
 	return (bsi->GetUIntValue("UI", "SettingsVersion", &settings_version) && settings_version == SETTINGS_VERSION);
 }
 
+// A settings file marks itself with this key in [UI] once the lag default has been dealt with: SetDefaultSettings sets it
+// in a new file, and MigrateSettings sets it after moving an old one.
+static constexpr const char* IOP_THREAD_LAG_MIGRATED_KEY = "IopThreadLagMigrated";
+
+// What iopThreadLag defaulted to before it became one frame (IopThread::kDefaultSettingLag). A file made then holds this
+// exact value, so it is a stored default and not a choice. Kept as a number of its own: IopThread::kDefaultLag, which
+// has the same value, is the tight bound the lag rules use, and has to be free to move without moving this.
+static constexpr int IOP_THREAD_LAG_OLD_DEFAULT = 24576;
+
+// The same for the IOP thread default on a host with a narrow performance tier (IopThread::DefaultOnForHost).
+static constexpr const char* IOP_THREAD_NARROW_TIER_MIGRATED_KEY = "IopThreadNarrowTierMigrated";
+
+bool VMManager::Internal::MigrateSettings(SettingsInterface& bsi)
+{
+	// The host is read only when the move that needs it has not run yet.
+	const bool host_needed = !bsi.GetBoolValue("UI", IOP_THREAD_NARROW_TIER_MIGRATED_KEY, false);
+	return MigrateSettings(bsi, host_needed ? IopThread::CurrentHostInfo() : IopThread::HostCpuInfo{});
+}
+
+bool VMManager::Internal::MigrateSettings(SettingsInterface& bsi, const IopThread::HostCpuInfo& host)
+{
+	bool changed = false;
+
+	if (!bsi.GetBoolValue("UI", IOP_THREAD_LAG_MIGRATED_KEY, false))
+	{
+		bsi.SetBoolValue("UI", IOP_THREAD_LAG_MIGRATED_KEY, true);
+		changed = true;
+
+		int lag = 0;
+		if (bsi.GetIntValue("EmuCore/Speedhacks", "iopThreadLag", &lag) && lag == IOP_THREAD_LAG_OLD_DEFAULT)
+			bsi.SetIntValue("EmuCore/Speedhacks", "iopThreadLag", IopThread::kDefaultSettingLag);
+	}
+
+	if (!bsi.GetBoolValue("UI", IOP_THREAD_NARROW_TIER_MIGRATED_KEY, false))
+	{
+		bsi.SetBoolValue("UI", IOP_THREAD_NARROW_TIER_MIGRATED_KEY, true);
+		changed = true;
+
+		// The file's own MTVU setting counts one more thread in the host rule, as it will when the file is loaded.
+		const bool mtvu = bsi.GetBoolValue("EmuCore/Speedhacks", "vuThread", false);
+		if (IopThread::DefaultOnForHost(host, mtvu) && !bsi.GetBoolValue("EmuCore/Speedhacks", "iopThread", false))
+			bsi.SetBoolValue("EmuCore/Speedhacks", "iopThread", true);
+	}
+
+	return changed;
+}
+
 void VMManager::Internal::LoadStartupSettings()
 {
 	SettingsInterface* bsi = Host::Internal::GetBaseSettingsLayer();
@@ -760,6 +808,11 @@ void VMManager::SetDefaultSettings(
 		Pcsx2Config temp_config;
 		SettingsSaveWrapper ssw(si);
 		temp_config.LoadSave(ssw);
+
+		// The defaults just written are the current ones, so nothing in this file needs MigrateSettings. The
+		// host-dependent ones follow just below (SetHardwareDependentDefaultSettings).
+		si.SetBoolValue("UI", IOP_THREAD_LAG_MIGRATED_KEY, true);
+		si.SetBoolValue("UI", IOP_THREAD_NARROW_TIER_MIGRATED_KEY, true);
 
 		// Settings not part of the Pcsx2Config struct.
 		si.SetBoolValue("EmuCore", "EnableFastBoot", true);
@@ -811,9 +864,8 @@ void VMManager::LoadSettings()
 		WarnAboutUnsafeSettings();
 		ApplyGameFixes();
 
-		// After the database, because a database cycle rate is one of the things that
-		// decides the answer. Once per apply, not once per frame: the governor resolves
-		// this for itself every window and does not log.
+		// After the database, because a database cycle rate can change the answer. Logged once
+		// per apply; the governor resolves this itself every window without logging.
 		EECycleRate::LogResolvedEligibility();
 	}
 }
@@ -857,10 +909,9 @@ void VMManager::LoadCoreSettings(SettingsInterface& si)
 	// below spare it, so the value survives long enough for the database to be told to
 	// leave it alone.
 	//
-	// The two cycle-rate claims come from the same read. They are key presence, not
-	// value comparison: a per-game EECycleRate that happens to equal the global one is
-	// still the player saying "this game runs at this rate", and the dynamic governor
-	// has to leave it alone.
+	// The two cycle-rate claims come from the same read. They are key presence, not value
+	// comparison: a per-game EECycleRate equal to the global one is still an explicit
+	// per-game choice, and the dynamic governor must leave it alone.
 	EmuConfig.PerGameClaimsEECycleRate = false;
 	EmuConfig.PerGameClaimsDynamicEECycleRate = false;
 	if (const SettingsInterface* game_layer = Host::Internal::GetGameSettingsLayer())
@@ -871,9 +922,9 @@ void VMManager::LoadCoreSettings(SettingsInterface& si)
 		EmuConfig.PerGameClaimsDynamicEECycleRate = overrides.Has(SpeedHack::DynamicEECycleRate);
 	}
 
-	// An auto-tune trial of the governor is the per-game key it becomes if it is kept: the keep writes it into
-	// the game's file, where it claims the governor over a pinned rate. The trial has to resolve the same way,
-	// or it would measure a governor the kept setting would not have been.
+	// An auto-tune trial of the governor is the per-game key it becomes if kept: the keep writes it
+	// into the game's file, where it claims the governor over a pinned rate. The trial has to
+	// resolve the same way, or it would measure a governor the kept setting would not give.
 	if (const SettingsInterface* trial_layer = Host::Internal::GetAutoTuneSettingsLayer())
 	{
 		const AutoTune::LeverKey governor_key = AutoTune::KeyForLever(AutoTuneLever::EeGovernor);
@@ -944,8 +995,8 @@ void VMManager::ApplyArcadeSessionSettings(SettingsInterface& si)
 	EmuConfig.Pad.MultitapPort0_Enabled = false;
 	EmuConfig.Pad.MultitapPort1_Enabled = false;
 
-	// The boards have more RAM than a console (a System 256 game needs 64MB EE and 4MB IOP); PCSX2x6
-	// runs every arcade game with the 128MB/8MB map, the arcade TOOL's.
+	// The boards have more RAM than a console (a System 256 game needs 64MB EE and 4MB IOP), so every
+	// arcade game runs with the 128MB/8MB map.
 	EmuConfig.Cpu.ExtraMemory = true;
 }
 
@@ -1702,9 +1753,8 @@ bool VMManager::AutoDetectSource(const std::string& filename, Error* error)
 }
 
 // The board as a freshly started emulator has it: no interrupt or DMA pending, nothing half transferred
-// in the drive, its registers zero, JVS off until the game starts it. At a game's start and at every
-// reset of it (ARMSX2: the board outlives a game here, where PCSX2x6 started a new process). The
-// board's RAM and SRAM, which a reset keeps, are left alone.
+// in the drive, its registers zero, JVS off until the game starts it. Applied at a game's start and at
+// every reset of it. The board's RAM and SRAM, which a reset keeps, are left alone.
 static void ResetArcadeBoard()
 {
 	ACCORE::Reset();
@@ -1757,7 +1807,6 @@ bool VMManager::OpenArcadeGame(const VMBootParameters& boot_params, Error* error
 
 	const GameDatabaseSchema::GameEntry* const db = GameDatabase::findGame(gameid);
 
-	// The board: System 246, or the overclocked System 256 / Super System 256.
 	std::string platform = StringUtil::toLower(ini.GetStringValue("game", "platform", ""));
 	if (platform.empty() && db)
 	{
@@ -1821,7 +1870,6 @@ bool VMManager::OpenArcadeGame(const VMBootParameters& boot_params, Error* error
 	else
 		mode = JVS_MODE::DEFAULT;
 
-	// The files next to it.
 	std::string basedir(Path::GetDirectory(filename));
 	const std::string subdir = ini.GetStringValue("data", "subdir", gameid.c_str());
 	if (!subdir.empty())
@@ -1854,11 +1902,11 @@ bool VMManager::OpenArcadeGame(const VMBootParameters& boot_params, Error* error
 	if (dongle.empty())
 		dongle = gameid + ".ps2";
 	std::string card = ini.GetStringValue("data", "card", "");
-	// Soul Calibur II is the one game that reads a card of its own in slot 2, its Conquest card; PCSX2x6's testers
-	// saw its opponents' AI go wrong without one (issue #793). An .acgame that names no card gets the one named
-	// after the game in the memory cards folder, when there is one (ARMSX2 for Android puts SC2MAKER's blank card
-	// there). It is a raw card, its spare bytes the game's own checksums, so never a .bin (converted as a card
-	// without ECC). Every other game keeps slot 2 empty unless its .acgame names a card.
+	// Soul Calibur II is the one game that reads a card of its own in slot 2, its Conquest card, and
+	// its opponents' AI goes wrong without one. An .acgame that names no card gets the one named after
+	// the game in the memory cards folder, when there is one. It is a raw card, its spare bytes the
+	// game's own checksums, so never a .bin (converted as a card without ECC). Every other game keeps
+	// slot 2 empty unless its .acgame names a card.
 	if (card.empty() && gameid == "NM00007" &&
 		FileSystem::FileExists(Path::Combine(EmuFolders::MemoryCards, "NM00007.conquestcard").c_str()))
 	{
@@ -2153,13 +2201,33 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 	if (!GSDumpReplayer::IsReplayingDump())
 	{
 		Console.WriteLn("Loading BIOS...");
-		if (!LoadBIOS())
+		std::string bios_path;
+		const BIOSLoadResult bios_result = LoadBIOS(&bios_path);
+		if (bios_result == BIOSLoadResult::Unreadable)
+		{
+			Error::SetStringFmt(error, TRANSLATE_FS("VMManager", "The BIOS file '{}' could not be read."),
+				Path::GetFileName(bios_path));
+			return VMBootResult::BIOSNotUsable;
+		}
+		if (bios_result == BIOSLoadResult::NotABIOS)
+		{
+			Error::SetStringFmt(error, TRANSLATE_FS("VMManager", "The BIOS file '{}' is not a PlayStation 2 BIOS image, or it is damaged."),
+				Path::GetFileName(bios_path));
+			return VMBootResult::BIOSNotUsable;
+		}
+		if (bios_result == BIOSLoadResult::PS1BIOS)
+		{
+			Error::SetStringFmt(error, TRANSLATE_FS("VMManager", "The BIOS file '{}' is a PlayStation 1 BIOS. PS1 BIOS files don't work for the PlayStation 2: use a BIOS dumped from a PlayStation 2."),
+				Path::GetFileName(bios_path));
+			return VMBootResult::BIOSNotUsable;
+		}
+		if (bios_result == BIOSLoadResult::NotFound)
 		{
 			if (Arcade::IsActive())
 			{
 				Error::SetString(error, TRANSLATE_STR("VMManager",
 					"Arcade games need the BIOS of a Namco System 246 or 256 board (a COH-H BIOS) in the BIOS folder."));
-				return VMBootResult::StartupFailure;
+				return VMBootResult::BIOSNotFound;
 			}
 			Error::SetStringFmt(error,
 				TRANSLATE_FS("VMManager",
@@ -2169,7 +2237,7 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 					"PCSX2 will be able to run once you've placed your BIOS image inside the folder named \"bios\" within the data directory "
 					"(Tools Menu -> Open Data Directory)."),
 				PCSX2_DOCUMENTATION_BIOS_URL_SHORTENED);
-			return VMBootResult::StartupFailure;
+			return VMBootResult::BIOSNotFound;
 		}
 
 		// Must happen after BIOS load, depends on BIOS version.
@@ -2384,9 +2452,8 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 	Console.WriteLn("VM subsystems initialized in %.2f ms", init_timer.GetTimeMilliseconds());
 	s_state.store(VMState::Paused, std::memory_order_release);
 	// A paused VM holds the IOP for as long as it stays paused (SetState does the same when it enters Paused). This
-	// store bypasses SetState, and the first resume goes through SetState: it calls SPU2::SetOutputPaused(false),
-	// which touches the audio stream the IOP thread started above writes. Found at step 10 by that assert, in the
-	// first BIOS boot of armsx2-sdl in Lockstep (IOP thread design 7.1, row C25).
+	// store bypasses SetState, and the first resume goes through SetState, which calls SPU2::SetOutputPaused(false)
+	// and touches the audio stream the IOP thread started above writes.
 	IopThread::OnVmPaused(true);
 	Host::OnVMStarted();
 	FullscreenUI::OnVMStarted();
@@ -2457,6 +2524,7 @@ void VMManager::Shutdown(bool save_resume_state)
 	// end input recording before clearing state
 	if (g_InputRecording.isActive())
 		g_InputRecording.stop();
+	PadScript::OnShutdown();
 
 	SaveSessionTime(s_disc_serial);
 	s_elf_override = {};
@@ -2589,8 +2657,8 @@ void VMManager::Reset()
 	memSetExtraMemMode(EmuConfig.Cpu.ExtraMemory);
 	vuAotResetStickyTripwire();
 	// The reset puts the IOP back in PS2 mode, so a VM that a PS1 game demoted to Off gets its IOP
-	// thread back (design 9.5, 9.6). The mode is chosen before the recompilers are reset, which
-	// generates the EE dispatcher for it.
+	// thread back. The mode is chosen before the recompilers are reset, which generates the EE
+	// dispatcher for it.
 	IopThread::ChooseModeForReset();
 	EECycleRate::SyncToConfigured();
 	EECycleRateSampler::OnLifecycleReset("VM reset");
@@ -2600,8 +2668,7 @@ void VMManager::Reset()
 	cpuReset();
 	IopThread::SyncThread();
 	IopThread::ResyncClocks();
-	// A VM that a PS1 game demoted to Off gets its IOP thread back here, and a thread that has just started
-	// is on the CPU thread's affinity until it is placed.
+	// A thread that has just started is on the CPU thread's affinity until it is placed.
 	if (IopThread::PlacementToken() != s_iop_placement_token)
 		SetEmuThreadAffinities();
 	hwReset();
@@ -2716,6 +2783,7 @@ bool VMManager::DoLoadState(const char* filename, Error* error)
 		return false;
 
 	Host::OnSaveStateLoaded(filename, true);
+	PadScript::OnStateLoaded();
 	if (g_InputRecording.isActive())
 	{
 		g_InputRecording.handleLoadingSavestate();
@@ -2739,7 +2807,6 @@ void VMManager::DoSaveState(const char* filename, s32 slot_for_message, bool zip
 		return;
 	}
 
-	// The state reads the IOP's registers, RAM and devices.
 	IopThread::VmHold iop_hold;
 
 	Error error;
@@ -3037,12 +3104,10 @@ float VMManager::GetTargetSpeedForLimiterMode(LimiterModeType mode)
 
 void VMManager::UpdateTargetSpeed()
 {
-	// Captured before anything below is recomputed, because most calls here do not change
-	// the deadline at all - a fullscreen toggle, a vsync settings apply, the ELF-executed
-	// path and FrameRateChanged all land in this function with the same answer coming out.
-	// The cycle-rate governor treats a moved deadline as a lifecycle reset, and a reset it
-	// did not need costs it the rate it had chosen plus a full warm-up before it could
-	// choose it again.
+	// Captured before anything below is recomputed: most calls here (fullscreen toggle, vsync
+	// settings apply, ELF executed, FrameRateChanged) leave the deadline unchanged. The cycle-rate
+	// governor treats a moved deadline as a lifecycle reset, which costs it its chosen rate and a
+	// full warm-up.
 	const s64 old_limiter_ticks_per_frame = s_limiter_ticks_per_frame;
 	const float old_target_speed = s_target_speed;
 	const bool old_use_vsync_for_timing = s_use_vsync_for_timing;
@@ -3094,18 +3159,17 @@ void VMManager::UpdateTargetSpeed()
 		MTGS::UpdateVSyncMode();
 		{
 			// Empties the audio buffer and changes its rate and volume from the producer's side, which is the
-			// IOP thread's (IOP thread design 8.10). Reached from the event test (a frame rate change), so a
-			// hold that never sleeps.
+			// IOP thread's. Reached from the event test (a frame rate change), so a hold that never sleeps.
 			IopThread::VmHold iop_hold(IopThread::HoldKind::Emulation);
 			SPU2::OnTargetSpeedChanged();
 		}
 		ResetFrameLimiter();
 	}
 
-	// Only when the deadline actually moved, or stopped existing. When it did, anything the
-	// governor inferred from the old one is a statement about a different machine - and if
-	// the limiter has gone unlimited or host-vsync paced, Throttle() will not close another
-	// window, so this is also the only chance to hand back a rate it had lowered.
+	// Only when the deadline actually moved or stopped existing: whatever the governor inferred
+	// from the old one no longer holds. If the limiter has gone unlimited or host-vsync paced,
+	// Throttle() will not close another window, so this is also the only chance to hand back a
+	// rate it had lowered.
 	if (s_limiter_ticks_per_frame != old_limiter_ticks_per_frame || s_target_speed != old_target_speed ||
 		s_use_vsync_for_timing != old_use_vsync_for_timing)
 	{
@@ -3144,12 +3208,12 @@ void VMManager::Internal::Throttle(bool vsync_start)
 		return;
 	}
 
-	const u64 iEnd = GetCPUTicks(); // The current tick we actually stopped on.
+	const u64 iEnd = GetCPUTicks();
 
 	// Close the active-work segment that just ended (before the limiter sleep below), then re-open
-	// one AFTER the sleep. A frame's work is the two segments, one per wait; `frame_end` marks the
-	// vsync-end wait that completes it. The ScopedGuard fires on EVERY exit past here — including
-	// the missed-frame early return — so measurement survives the can't-hit-target case.
+	// one after the sleep. A frame's work is the two segments, one per wait; `frame_end` marks the
+	// vsync-end wait that completes it. The ScopedGuard fires on every exit past here, including
+	// the missed-frame early return.
 	const u64 segment_ticks = PerformanceMetrics::OnFrameWorkSegmentComplete(iEnd, !vsync_start);
 	ScopedGuard begin_next_frame_work([]() { PerformanceMetrics::OnFrameWorkBegin(); });
 
@@ -3158,17 +3222,15 @@ void VMManager::Internal::Throttle(bool vsync_start)
 		(vsync_start ? (s_limiter_ticks_per_frame * 0.9) : s_limiter_ticks_per_frame); // Compute when we would expect this frame to end, assuming everything goes perfectly perfect.
 	const s64 sDeltaTime = iEnd - uExpectedEnd; // The diff between when we stopped and when we expected to.
 
-	// The frame's segment boundary for the dynamic EE cycle-rate governor and for auto-tune's
-	// tally, before the sleep below, so the governor's "active" is the frame's work and not the
-	// work plus the wait for the deadline. It also has to be before the missed-frame return: a
-	// frame that overran is the one both most need to see.
+	// The frame's segment boundary for the dynamic EE cycle-rate governor and auto-tune's tally.
+	// It sits before the sleep so the governor's "active" time excludes the wait for the deadline,
+	// and before the missed-frame return because an overrun frame is the one both most need to see.
 	//
-	// This is the only place a frame is judged late; the governor reads the verdict as Late or
-	// worse and auto-tune as Overran. The frame is judged by the vsync-end wait against the
-	// full-frame deadline. The vsync-start wait's own deadline is 0.9 of that and says nothing
-	// about the frame, except when it overran by a whole frame: the missed-frame branch below
-	// moves the frame start forward, and the vsync-end verdict would be taken against the
-	// moved deadline.
+	// This is the only place a frame is judged late (Late or worse for the governor, Overran for
+	// auto-tune). The verdict comes from the vsync-end wait against the full-frame deadline. The
+	// vsync-start wait's deadline is 0.9 of that and says nothing about the frame, except when it
+	// overran by a whole frame: the missed-frame branch below moves the frame start forward, and
+	// the vsync-end verdict would then be taken against the moved deadline.
 	EECycleRateLateness lateness = EECycleRateLateness::OnTime;
 	if (sDeltaTime >= s_limiter_ticks_per_frame)
 		lateness = EECycleRateLateness::Overran;
@@ -3247,8 +3309,7 @@ bool VMManager::IsFrameAdvancing()
 
 bool VMManager::ChangeDisc(CDVD_SourceType source, std::string path)
 {
-	// Reopens the disc backend and writes the CDVD tray state, which the IOP's CDVD code reads
-	// (IOP thread design 8.3).
+	// Reopens the disc backend and writes the CDVD tray state, which the IOP's CDVD code reads.
 	IopThread::VmHold iop_hold;
 
 	const CDVD_SourceType old_type = CDVDsys_GetSourceType();
@@ -3867,7 +3928,7 @@ void VMManager::Internal::EntryPointCompilingOnCPUThread()
 
 	// Runs inside the EE JIT's compile of the entry point block, with the IOP thread alive. It applies the
 	// game's settings, writes the boot patches (IOP patch lines write IOP RAM) and resets the recompilers,
-	// the IOP's included, so the IOP is held for all of it (IOP thread design section 7, row C19).
+	// the IOP's included, so the IOP is held for all of it.
 	IopThread::VmHold iop_hold;
 
 	const bool reset_speed_limiter = (EmuConfig.EnableFastBootFastForward && IsFastBootInProgress());
@@ -4142,7 +4203,7 @@ void VMManager::CheckForMiscConfigChanges(const Pcsx2Config& old_config)
 	// threads to place, so the others' places can change with it.
 	if (HasValidVM() && (EmuConfig.EnableThreadPinning != old_config.EnableThreadPinning ||
 							EmuConfig.EnablePrimeCorePlacement != old_config.EnablePrimeCorePlacement ||
-							(s_thread_affinities_set && EmuConfig.Speedhacks.vuThread != old_config.Speedhacks.vuThread) ||
+							((s_thread_affinities_set || EmuConfig.EnableThreadPinning) && EmuConfig.Speedhacks.vuThread != old_config.Speedhacks.vuThread) ||
 							IopThread::PlacementToken() != s_iop_placement_token))
 	{
 		SetEmuThreadAffinities();
@@ -4171,11 +4232,10 @@ void VMManager::CheckForConfigChanges(const Pcsx2Config& old_config)
 	else if (GetState() == VMState::Shutdown)
 	{
 		// The desktop settings window and Big Picture apply settings with no VM too. Nothing is running to
-		// reset, but turning vu-aot off still clears what it saved. What counts is a change of the global
-		// setting since it was last seen with no VM, not old_config against the new one: the config a game
-		// ended with (its settings layered over the global ones) is what old_config holds when a boot fails
-		// and settings are applied in the Shutdown state, and leaving a game must never clear the cache,
-		// which is shared between games.
+		// reset, but turning vu-aot off still clears what it saved. The test is a change of the global
+		// setting since it was last seen with no VM, not old_config against the new one: after a failed
+		// boot old_config holds the game's settings layered over the global ones, and leaving a game must
+		// never clear the cache, which is shared between games.
 		vuAotNoVmSettingsApplied(GetGlobalVuAot(), EmuConfig.Cpu.Recompiler.EnableVUProgramCache);
 	}
 
@@ -4843,15 +4903,13 @@ static u64 ClusterMaskForProcessorMask(u64 processor_mask)
 
 // Where the back thread goes when the MTGS (front) thread is confined to gs_mask and the
 // processors in occupied are pinned to other busy emu threads. Every draw crosses between
-// front and back through a shared ring, so the back wants the front's cache: measured on the
-// M2 (Spider-Man 3, 2x), back on the front's P-cluster 8.6 ms/frame, the other P-cluster
-// 11.5-12.0 ms, an E-core 22-23 ms. So, in order: the rest of the front's cluster if it is in
-// the performance tier, then the rest of the tier, each first without the occupied processors
-// and then with them. Never the front's own core(s) while anything else is left: both threads
-// are busy, and a back thread allowed onto a single-core front's core gets migrated there
-// whenever the front sleeps and then preempted by every front wake (SD865, front pinned to
-// one core: 560-930 back preemptions per frame against ~2). If the topology gives no answer,
-// every processor except the front's; 0 (unpinned) only when there is nothing else.
+// front and back through a shared ring, so the back wants the front's cache. So, in order: the
+// rest of the front's cluster if it is in the performance tier, then the rest of the tier, each
+// first without the occupied processors and then with them. Never the front's own core(s) while
+// anything else is left: both threads are busy, and a back thread allowed onto a single-core
+// front's core gets migrated there whenever the front sleeps and then preempted by every front
+// wake. If the topology gives no answer, every processor except the front's; 0 (unpinned) only
+// when there is nothing else.
 static u64 ChooseGSBackThreadAffinity(u64 gs_mask, u64 occupied, bool* shares_busy_core = nullptr)
 {
 	if (shares_busy_core)
@@ -4954,7 +5012,8 @@ void VMManager::SetHardwareDependentDefaultSettings(SettingsInterface& si)
 
 	Console.WriteLn(fmt::format("CPU cores count: {}", core_count));
 
-	if (core_count >= 3)
+	const bool mtvu = (core_count >= 3);
+	if (mtvu)
 	{
 		Console.WriteLn("  Enabling MTVU.");
 		si.SetBoolValue("EmuCore/Speedhacks", "vuThread", true);
@@ -4964,6 +5023,14 @@ void VMManager::SetHardwareDependentDefaultSettings(SettingsInterface& si)
 		Console.WriteLn("  Disabling MTVU.");
 		si.SetBoolValue("EmuCore/Speedhacks", "vuThread", false);
 	}
+
+	// The IOP thread starts on where the performance tier is two or three cores (IopThread::DefaultOnForHost has the
+	// rule and the measurement behind it), and off everywhere else. The MTVU setting just chosen counts in it.
+	const IopThread::HostCpuInfo host = IopThread::CurrentHostInfo();
+	const bool iop_thread = IopThread::DefaultOnForHost(host, mtvu);
+	Console.WriteLn(fmt::format("  {} the IOP thread ({} performance cores of {}).", iop_thread ? "Enabling" : "Leaving off",
+		host.performance_cores, host.total_cores));
+	si.SetBoolValue("EmuCore/Speedhacks", "iopThread", iop_thread);
 
 	const int extra_threads = (core_count > 3) ? 3 : 2;
 	Console.WriteLn(fmt::format("  Setting Extra Software Rendering Threads to {}.", extra_threads));
@@ -4975,11 +5042,23 @@ void VMManager::SetHardwareDependentDefaultSettings(SettingsInterface& si)
 	// on Apple Silicon under Asahi and Intel Alder Lake-class hybrid systems.
 	// SetEmuThreadAffinities already sorts processors by frequency, so pinning
 	// to indices 0..2 lands on the fastest cores.
+	//
+	// Not where the performance tier cannot hold the EE, GS and (with MTVU) VU1 threads: the ordered pin gives out the
+	// fastest processors first, so with two fast cores it puts the GS thread on a slow one (IopThread::OrderedPinAllowed).
 	if (cpuinfo_get_clusters_count() > 1 && core_count >= 3)
 	{
-		Console.WriteLn(fmt::format("  Heterogeneous CPU detected ({} clusters); enabling thread pinning.",
-			cpuinfo_get_clusters_count()));
-		si.SetBoolValue("EmuCore", "EnableThreadPinning", true);
+		if (IopThread::OrderedPinAllowed(VMManager::Internal::GetPerformanceCoreMask(), mtvu))
+		{
+			Console.WriteLn(fmt::format("  Heterogeneous CPU detected ({} clusters); enabling thread pinning.",
+				cpuinfo_get_clusters_count()));
+			si.SetBoolValue("EmuCore", "EnableThreadPinning", true);
+		}
+		else
+		{
+			Console.WriteLn(fmt::format("  Heterogeneous CPU detected ({} clusters), but its {} performance cores cannot hold the EE, GS{} "
+										"threads; leaving thread pinning off.",
+				cpuinfo_get_clusters_count(), host.performance_cores, mtvu ? " and VU1" : ""));
+		}
 	}
 }
 
@@ -5058,6 +5137,7 @@ void VMManager::SetHardwareDependentDefaultSettings(SettingsInterface& si)
 u64 VMManager::Internal::GetPerformanceCoreMask()
 {
 #if defined(__linux__)
+	EnsureCPUInfoInitialized(); // callable before the VM exists: the settings defaults and migration ask it
 	return GetPerformanceCoresMask();
 #else
 	return 0; // no capacity source: the cores cannot be told apart, so Threaded is not offered
@@ -5073,14 +5153,15 @@ bool VMManager::Internal::CanSplitGS()
 {
 #if defined(__linux__)
 	EnsureCPUInfoInitialized();
-	// EE, VU1, GS front and GS back, plus the IOP thread when it is asked for: that one is busy 40 to 99% of a core, and a
-	// split beside it needs a fifth performance core. Measured live with the IOP thread on, on four big cores (SD865, RG 476H),
-	// the split is 0.6 to 14% slower than one GS thread in Spider-Man 3, God of War II and Katamari, even with the prime core
-	// rule (Spider-Man 3 +4% and +5%, God of War II +8% and +12%, Katamari +1% and +14% on the RG 476H and the SD865); Sly 3
-	// still gains 1 to 4%. Not measured with the IOP thread on: Ratchet & Clank, or any host with five or more performance cores.
-	const u32 needed = 4 + (EmuConfig.Speedhacks.iopThread ? 1 : 0);
-	const u32 tier = GetPerformanceCoreCount();
-	return tier >= needed && tier < cpuinfo_get_processors_count();
+	// EE, VU1, GS front and GS back, plus the IOP thread when it will run on a thread of its own (IopThread::GsSplitFits
+	// says why it takes a fifth core). The setting being on is not enough: it can be on (a player turned it on, or
+	// the game database did) on a host ResolveMode can never give Threaded (not ARM64, fewer than two performance cores,
+	// too few cores in total), and there the thread never exists and must not cost the split a core. The VM conditions are left at their defaults: this is a
+	// question about the host. For an arcade title, or while an IOP breakpoint is set, the thread is Off for that VM
+	// and the split is withheld anyway, which errs on the side of the measured result.
+	const bool iop_thread_threaded =
+		IopThread::ResolveMode(EmuConfig, IopThread::CurrentHostInfo(), IopThread::VmConditions{}) == IopThreadMode::Threaded;
+	return IopThread::GsSplitFits(GetPerformanceCoreCount(), cpuinfo_get_processors_count(), iop_thread_threaded);
 #else
 	return false;
 #endif
@@ -5204,30 +5285,60 @@ bool VMManager::Internal::GSBackThreadWouldShareBusyCore()
 int g_android_affinity_mode = 7;
 #endif
 
+// The processors a concurrent IOP thread is confined to (IopThread::SlowCoresMask): everything outside the
+// performance tier. 0 when there is no such place, and whoever is placing the thread decides.
+static u64 GetIopThreadOutsideTierMask()
+{
+#if defined(__linux__)
+	VMManager::EnsureCPUInfoInitialized();
+	u64 all = 0;
+	const u32 count = cpuinfo_get_processors_count();
+	for (u32 i = 0; i < count; i++)
+	{
+		const cpuinfo_processor* proc = cpuinfo_get_processor(i);
+		if (proc && GetProcessorIdForProcessor(proc) < 64)
+			all |= static_cast<u64>(1) << GetProcessorIdForProcessor(proc);
+	}
+	return IopThread::SlowCoresMask(GetPerformanceCoresMask(), all, IopThread::PlacesThread());
+#else
+	return 0; // no capacity source here: the tier cannot be read
+#endif
+}
+
 // The IOP thread's place. The thread begins with the affinity of the thread that created it, which is the CPU
 // thread, and that may have been narrowed to one core, so a thread that exists is always given a mask explicitly
 // (0 meaning any processor) rather than left to inherit one. Without a thread there is nothing to place.
+//
+// On a host with slower cores the thread goes there whatever `mask` asks for, so no placement mode can put it on a
+// fast core. SlowCoresMask says why. `mask` only applies on a host with no slower core, or with no concurrent thread.
 static void SetIopThreadAffinity(u64 mask)
 {
-	if (IopThread::g_thread.IsRunning())
-		IopThread::g_thread.GetThreadHandle().SetAffinity(mask);
+	if (!IopThread::g_thread.IsRunning())
+		return;
+
+	const u64 slow_cores = GetIopThreadOutsideTierMask();
+	if (slow_cores != 0)
+	{
+		mask = slow_cores;
+		INFO_LOG("IOP thread pinned outside the performance tier (mask 0x{:x})", mask);
+	}
+	IopThread::g_thread.GetThreadHandle().SetAffinity(mask);
 }
 
-// ---- the prime core ----------------------------------------------------------------------------
+// The prime core. On a part with one core clearly faster than the rest of its performance tier, the
+// thread the frame waits on should have that core to itself. Which thread that is changes with the game:
+// the GS back thread in a GS-heavy scene, the EE thread in an EE-bound one, the MTVU thread in a
+// VU1-heavy one. The kernel's own balancing puts the busiest single thread on the prime core, but with the
+// GS split on it does not keep the back thread there: the back thread shares the prime core with the EE
+// thread and changes processors about a hundred times a second. So while the GS back thread is running,
+// the busiest of EE, VU1, GS front and GS back gets the prime core alone and every other emulation thread
+// is kept to the rest of the tier. The choice is made from the usage figures PerformanceMetrics already
+// samples, with a margin and a streak (IopThread::PrimeArbiterUpdate) so equally busy threads do not
+// trade the core.
 //
-// On a part with one core clearly faster than the rest of its performance tier (SD865: one 2.84 GHz core over three at
-// 2.42 GHz; T820 likewise), the thread the frame waits on should have that core to itself. Which thread that is changes
-// with the game: a GS-heavy scene is waited on by the GS back thread, an EE-bound one by the EE thread, a VU1-heavy one
-// by the MTVU thread. The kernel's own balancing puts the busiest single thread on the prime core, but with the GS split
-// on it does not keep the back thread there: the back thread shares the prime core with the EE thread and changes
-// processors about a hundred times a second. So while the GS back thread is running, the busiest of EE, VU1, GS front
-// and GS back gets the prime core alone and every other emulation thread is kept to the rest of the tier. The choice is
-// made from the usage figures PerformanceMetrics already samples, with a margin and a streak
-// (IopThread::PrimeArbiterUpdate) so equally busy threads do not trade the core.
-//
-// It applies only where nothing placed the threads by hand: the unpinned Linux placement (which already confines the GS
-// threads to the tier; ROCKNIX runs with pinning off) and Android's Performance Cores mode (the default). Pinned placements
-// and the ranked Android modes are the user's choice and are left alone.
+// It applies only where nothing placed the threads by hand: the unpinned Linux placement (which already
+// confines the GS threads to the tier) and Android's Performance Cores mode (the default). Pinned
+// placements and the ranked Android modes are the user's choice and are left alone.
 static std::mutex s_prime_mutex; // SetEmuThreadAffinities and the arbiter both write the threads' masks
 static IopThread::PrimeSplit s_prime_split; // set by SetEmuThreadAffinities when the arbiter applies to the placement it made
 static IopThread::PrimeArbiter s_prime_arbiter;
@@ -5387,8 +5498,7 @@ void VMManager::SetEmuThreadAffinities()
 		// can't be read, or the fast tier is too narrow, we do NOTHING rather than something
 		// harmful. Note this deliberately does NOT fall through to the ordered per-core path
 		// below; that path is the pinning this mode exists to avoid.
-		// The IOP thread, when it runs beside the EE, is one more of them (design 10.3).
-		const IopThread::TierPlan tier = IopThread::PlanTier(perf_mask, android_mtvu, iop_thread);
+		const IopThread::TierPlan tier = IopThread::PlanTier(perf_mask, android_mtvu);
 		const u32 threads_to_place = tier.threads_to_place;
 		if (tier.tier_fits)
 		{
@@ -5409,8 +5519,8 @@ void VMManager::SetEmuThreadAffinities()
 			SetGSBackThreadAffinityLocked(back_fits ? perf_mask : 0);
 			s_thread_affinities_set = true;
 			// With the GS back thread running, the busiest thread gets the prime core alone (see the prime core block above).
-			// Only a part with one core clearly faster than the rest of its tier has a prime core to give: the RG 476H (T820:
-			// 1024 / 869 / 336) does; the RG 477V (Dimensity 8300: 1024 against 996) does not, and EAS keeps placing its threads.
+			// Only a part with one core clearly faster than the rest of its tier has a prime core to give; where the
+			// fast cores are close in capacity there is none, and the scheduler keeps placing the threads.
 			if (EmuConfig.EnablePrimeCorePlacement)
 			{
 				s_prime_split = GetPrimeCoreSplit();
@@ -5443,7 +5553,9 @@ void VMManager::SetEmuThreadAffinities()
 	// With MTVU off there is no VU thread to place, so GS inherits VU's slot when VU ranked
 	// higher — otherwise the faster core sits idle. Mirrors the desktop path's "steal vu's
 	// thread if mtvu is off". The IOP thread takes the first rank none of the others uses.
-	const IopThread::RankPlan ranks = IopThread::PlanRanks(g_android_affinity_mode, android_mtvu, iop_thread, s_processor_list.size());
+	// An IOP thread bound for the slow cores takes no rank from this list, which is fastest first.
+	const bool iop_takes_rank = iop_thread && GetIopThreadOutsideTierMask() == 0;
+	const IopThread::RankPlan ranks = IopThread::PlanRanks(g_android_affinity_mode, android_mtvu, iop_takes_rank, s_processor_list.size());
 	const int ee_rank = ranks.ee;
 	const int vu_rank = ranks.vu;
 	const int gs_rank = ranks.gs;
@@ -5483,14 +5595,14 @@ void VMManager::SetEmuThreadAffinities()
 	// pinning off, and a VM boot with pinning off is exactly the call a toggle check would skip.
 	// Threads we never narrowed are left alone, so a mask inherited from taskset survives.
 	const bool vm_running = (GetState() != VMState::Shutdown);
-	const bool new_pin_enable = (vm_running && EmuConfig.EnableThreadPinning);
+	const bool pin_requested = (vm_running && EmuConfig.EnableThreadPinning);
 	const bool was_pinned = s_thread_affinities_set;
 	static bool s_gs_tier_confined = false;
 
 	// Track whether pinning is *currently effective*, not just EmuConfig.EnableThreadPinning
 	// (matches refresh-experimental — a shutdown call with pinning enabled must not leave this
 	// flag true while the affinity + SW-renderer proc list get cleared).
-	s_thread_affinities_set = new_pin_enable;
+	s_thread_affinities_set = pin_requested;
 
 	EnsureCPUInfoInitialized();
 
@@ -5501,6 +5613,22 @@ void VMManager::SetEmuThreadAffinities()
 	}
 
 	const bool mtvu = EmuConfig.Speedhacks.vuThread;
+
+	// The ordered pin hands out the fastest processors first: EE, VU1, GS. On a performance tier of two that puts the GS
+	// thread on a slow core, and measured on two fast cores it lost 30 to 45% speed whether or not the IOP thread ran.
+	// Where the tier can be read and cannot hold those threads, fall back to the unpinned placement below, as Android's
+	// Performance Cores mode does (IopThread::OrderedPinAllowed).
+	const u64 perf_mask = Internal::GetPerformanceCoreMask();
+	const bool tier_too_narrow = pin_requested && !IopThread::OrderedPinAllowed(perf_mask, mtvu);
+	if (tier_too_narrow)
+	{
+		INFO_LOG("Thread pinning is on, but the performance tier has {} core(s) and the EE, GS{} threads need {}: not pinning them in "
+				 "order, using the unpinned placement instead.",
+			std::popcount(perf_mask), mtvu ? " and VU1" : "", mtvu ? 3 : 2);
+	}
+	const bool new_pin_enable = pin_requested && !tier_too_narrow;
+	s_thread_affinities_set = new_pin_enable;
+
 	if (!new_pin_enable || s_processor_list.size() < (mtvu ? 3 : 2))
 	{
 		if (new_pin_enable)
@@ -5512,12 +5640,19 @@ void VMManager::SetEmuThreadAffinities()
 			s_vm_thread_handle.SetAffinity(0);
 			SetIopThreadAffinity(0);
 		}
+		else if (GetIopThreadOutsideTierMask() != 0)
+		{
+			// Unpinned: the IOP thread would float over the fast cores beside the EE, GS and VU1 threads
+			// (IopThread::SlowCoresMask says why that is wrong), so it is placed outside the tier. A host with no
+			// slower core, or with no IOP thread, gets no mask here and is left as it was.
+			SetIopThreadAffinity(0);
+		}
 		s_software_renderer_processor_list = {};
 
 		// With pinning off, the GS front and back threads still stay off the slow tier of a
-		// big.LITTLE part: a back thread on an M2 E-core measured 22-23 ms/frame against 8.6 ms
-		// on a P-core, and Stuntman unpinned put it on E-cores for 46-88% of its cycles. Both
-		// get the same mask so the pair stays consistent. EE and VU are left to the scheduler.
+		// big.LITTLE part, where the back thread runs far slower and an unpinned scheduler tends
+		// to put it. Both get the same mask so the pair stays consistent. EE and VU are left to
+		// the scheduler.
 #if defined(__linux__)
 		const u64 gs_tier = vm_running ? GetUnpinnedGSTierMask() : 0;
 #else
@@ -5545,7 +5680,8 @@ void VMManager::SetEmuThreadAffinities()
 	s_gs_tier_confined = false;
 
 	// steal vu's thread if mtvu is off; the IOP thread, when it runs beside the EE, takes the next slot
-	const IopThread::OrderedPlan plan = IopThread::PlanOrdered(s_processor_list.size(), mtvu, iop_thread);
+	// An IOP thread bound for the slow cores takes no slot from this list, which is fastest first.
+	const IopThread::OrderedPlan plan = IopThread::PlanOrdered(s_processor_list.size(), mtvu, iop_thread && GetIopThreadOutsideTierMask() == 0);
 	const u32 ee_index = s_processor_list[plan.ee];
 	const u32 vu_index = s_processor_list[plan.vu];
 	const u32 gs_index = s_processor_list[plan.gs];
@@ -5578,7 +5714,7 @@ void VMManager::SetEmuThreadAffinities()
 		if (iop_affinity != 0)
 			INFO_LOG("  IOP thread is on processor {} (0x{:x})", s_processor_list[plan.iop], iop_affinity);
 		else
-			INFO_LOG("  IOP thread is not pinned");
+			INFO_LOG("  IOP thread has no processor in this list");
 	}
 	SetIopThreadAffinity(iop_affinity);
 

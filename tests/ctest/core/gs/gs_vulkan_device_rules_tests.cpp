@@ -92,6 +92,13 @@ const Device kAdrenoUnknownDriver = {GpuVendorID::Qualcomm, 0, "Adreno (TM) 650"
 	QualcommVersion(744)};
 const Device kPowerVR = {GpuVendorID::Imagination, kImaginationDriver, "PowerVR B-Series BXM-8-256", "", 0,
 	0x00582558u};
+// Pixel 11 Pro (Tensor G6), as its driver reports itself.
+const Device kPowerVRCSeries = {GpuVendorID::Imagination, kImaginationDriver, "PowerVR C-Series CXTP-48-1536 MC1",
+	"25.3@6908880", 0x70061042u, 0x00696bd0u};
+// Mesa's PowerVR driver (VK_DRIVER_ID_IMAGINATION_OPEN_SOURCE_MESA).
+constexpr u32 kPowerVRMesaDriver = 25;
+const Device kPowerVRMesa = {GpuVendorID::Imagination, kPowerVRMesaDriver, "PowerVR B-Series BXS-4-64 MC1",
+	"Mesa 25.2.0", 0, PackVulkanVersion(25, 2, 0)};
 const Device kAppleM2 = {0x10005u, kHoneykrispDriver, "Apple M2 Max (G14C B1)", "Mesa 25.3.0", 0,
 	PackVulkanVersion(25, 3, 0)};
 const Device kRadv = {GpuVendorID::AMD, kRadvDriver, "AMD Radeon RX 7900 XTX (RADV NAVI31)", "Mesa 25.0", 0,
@@ -112,6 +119,48 @@ TEST(GSVulkanDeviceRules, OnlyTheMaliG615HasBrokenTimestampQueries)
 	EXPECT_FALSE(Rules(renamed).broken_timestamp_queries);
 }
 
+// Spin GPU During Readbacks measured no frame-time or CPU-time change on a Mali-G57 with malisx2,
+// so no Mali part spins, on any driver.
+TEST(GSVulkanDeviceRules, NoMaliSpinsForReadbacks)
+{
+	EXPECT_TRUE(Rules(kMaliG57).skip_readback_spin);
+	EXPECT_TRUE(Rules(kRg477v).skip_readback_spin);
+	EXPECT_TRUE(Rules(kMaliG615R47).skip_readback_spin);
+	EXPECT_TRUE(Rules(kMaliSX2G615).skip_readback_spin);
+	EXPECT_TRUE(Rules(kMaliG610PanVK).skip_readback_spin);
+	EXPECT_FALSE(Rules(kAdreno650Turnip).skip_readback_spin);
+	EXPECT_FALSE(Rules(kAppleM2).skip_readback_spin);
+	EXPECT_FALSE(Rules(kRadv).skip_readback_spin);
+}
+
+TEST(GSVulkanDeviceRules, ImaginationsDriverAvoidsTheFeedbackLoopLayout)
+{
+	// The database's DisableAttachmentFeedbackLoopLayout for vk-powervr-proprietary, made effective.
+	EXPECT_TRUE(Rules(kPowerVR).avoid_feedback_loop_layout);
+	EXPECT_TRUE(Rules(kPowerVRCSeries).avoid_feedback_loop_layout);
+	// Keyed on the driver: Mesa's PowerVR driver is not covered by that row.
+	EXPECT_FALSE(Rules(kPowerVRMesa).avoid_feedback_loop_layout);
+	// And on the vendor: another vendor reporting the same driver ID is left alone.
+	Device not_imagination = kPowerVRCSeries;
+	not_imagination.vendor = GpuVendorID::AMD;
+	EXPECT_FALSE(Rules(not_imagination).avoid_feedback_loop_layout);
+}
+
+TEST(GSVulkanDeviceRules, OnlyImaginationsDriverOrdersTheInputAttachmentRead)
+{
+	EXPECT_TRUE(Rules(kPowerVR).ordered_input_attachment_read);
+	EXPECT_TRUE(Rules(kPowerVRCSeries).ordered_input_attachment_read);
+	EXPECT_FALSE(Rules(kPowerVRMesa).ordered_input_attachment_read);
+	// r44p1 avoids the layout too, and is not on this road: its in-pass read loses the device.
+	EXPECT_FALSE(Rules(kRg477v).ordered_input_attachment_read);
+	EXPECT_FALSE(Rules(kMaliG57).ordered_input_attachment_read);
+	EXPECT_FALSE(Rules(kAdreno740Turnip).ordered_input_attachment_read);
+	EXPECT_FALSE(Rules(kAppleM2).ordered_input_attachment_read);
+	EXPECT_FALSE(Rules(kRadv).ordered_input_attachment_read);
+	EXPECT_EQ(GpuProfileDetector::DescribeDeviceRules(Rules(kPowerVRCSeries)),
+		"avoid_feedback_loop_layout, ordered_input_attachment_read");
+}
+
 TEST(GSVulkanDeviceRules, OnlyAnR44p1DriverAvoidsTheFeedbackLoopLayout)
 {
 	EXPECT_TRUE(Rules(kRg477v).avoid_feedback_loop_layout);
@@ -126,12 +175,12 @@ TEST(GSVulkanDeviceRules, OnlyAnR44p1DriverAvoidsTheFeedbackLoopLayout)
 	EXPECT_FALSE(Rules(adreno_with_tag).avoid_feedback_loop_layout);
 }
 
-TEST(GSVulkanDeviceRules, PushDescriptorsAreAvoidedOnMaliAndOnUnknownAdrenoDrivers)
+TEST(GSVulkanDeviceRules, PushDescriptorsAreAvoidedOnArmsMaliDriverAndOnUnknownAdrenoDrivers)
 {
-	// Mali on any driver, Arm's or PanVK.
+	// Arm's blob avoids them; PanVK is Mesa's driver and keeps them.
 	EXPECT_TRUE(Rules(kRg477v).avoid_push_descriptors);
 	EXPECT_TRUE(Rules(kMaliG52).avoid_push_descriptors);
-	EXPECT_TRUE(Rules(kMaliG610PanVK).avoid_push_descriptors);
+	EXPECT_FALSE(Rules(kMaliG610PanVK).avoid_push_descriptors);
 	EXPECT_FALSE(Rules(kAdreno650Turnip).avoid_push_descriptors);
 	EXPECT_FALSE(Rules(kAdreno830Qualcomm).avoid_push_descriptors);
 	EXPECT_TRUE(Rules(kAdrenoUnknownDriver).avoid_push_descriptors);
@@ -179,17 +228,21 @@ TEST(GSVulkanDeviceRules, MaliSX2KeepsThePushDescriptorAvoidWithoutTheExtensionO
 	}
 }
 
-// Everything else on Mali stays avoided however many descriptors it reports: Arm's own blob, with
-// the same device name and revision, and PanVK.
+// Arm's own blob stays avoided however many descriptors it reports; PanVK keeps push descriptors.
 TEST(GSVulkanDeviceRules, OtherMaliDriversKeepThePushDescriptorAvoid)
 {
-	for (Device d : {kRg477v, kMaliG52, kMaliG610PanVK})
+	for (Device d : {kRg477v, kMaliG52})
 	{
 		d.max_push_descriptors = 32;
 		const VulkanDeviceRules rules = Rules(d);
 		EXPECT_TRUE(rules.avoid_push_descriptors) << d.name;
 		EXPECT_FALSE(rules.exempt_malisx2_push_descriptors) << d.name;
 	}
+
+	Device panvk = kMaliG610PanVK;
+	panvk.max_push_descriptors = 32;
+	EXPECT_FALSE(Rules(panvk).avoid_push_descriptors);
+	EXPECT_FALSE(Rules(panvk).exempt_malisx2_push_descriptors);
 }
 
 // The exemption is about Mali. A device that is not Arm's cannot pick it up from its driverInfo.
@@ -275,7 +328,7 @@ TEST(GSVulkanDeviceRules, DescribeNamesTheRulesThatAreTrue)
 {
 	EXPECT_EQ(GpuProfileDetector::DescribeDeviceRules(VulkanDeviceRules{}), "none");
 	EXPECT_EQ(GpuProfileDetector::DescribeDeviceRules(Rules(kRg477v)),
-		"broken_timestamp_queries, avoid_feedback_loop_layout, avoid_push_descriptors");
+		"broken_timestamp_queries, avoid_feedback_loop_layout, avoid_push_descriptors, skip_readback_spin");
 	EXPECT_EQ(GpuProfileDetector::DescribeDeviceRules(Rules(kAppleM2)),
 		"self_read_costs_measured, barrier_road_measured");
 	EXPECT_EQ(GpuProfileDetector::DescribeDeviceRules(Rules(kRadv)), "none");
@@ -284,9 +337,9 @@ TEST(GSVulkanDeviceRules, DescribeNamesTheRulesThatAreTrue)
 	Device malisx2 = kMaliSX2G615;
 	malisx2.max_push_descriptors = kEnoughPushDescriptors;
 	EXPECT_EQ(GpuProfileDetector::DescribeDeviceRules(Rules(malisx2)),
-		"broken_timestamp_queries, avoid_feedback_loop_layout, exempt_malisx2_push_descriptors");
+		"broken_timestamp_queries, avoid_feedback_loop_layout, exempt_malisx2_push_descriptors, skip_readback_spin");
 	EXPECT_EQ(GpuProfileDetector::DescribeDeviceRules(Rules(kMaliSX2G615)),
-		"broken_timestamp_queries, avoid_feedback_loop_layout, avoid_push_descriptors");
+		"broken_timestamp_queries, avoid_feedback_loop_layout, avoid_push_descriptors, skip_readback_spin");
 }
 
 // Each flag has its own entry in the name table. A flag added to VulkanDeviceRules without one is

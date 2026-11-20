@@ -211,12 +211,11 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
             onAction = { MainActivityRuntime.reopenSetup(); onDismiss() }),
         DrawerItem("setup.step.bios.title", "📀", AppRoute.BiosManager()),
         DrawerItem("memcard.title", "💾", AppRoute.MemoryCardManager()),
-        DrawerItem("savestate.title.loadManage", "📥", AppRoute.SaveManager),
+        DrawerItem("savestate.title.loadManage", "📥", AppRoute.SaveManager()),
         DrawerItem("tab.controls", "🕹️", AppRoute.ControllerManager),
         DrawerItem("patches.dialog.patchesAndCheats", "🪄", AppRoute.PatchManager),
         DrawerItem("renderer.section.texturePacks", "🖌️", AppRoute.TextureManager),
-        // Namco System 246/256 arcade games: their folder, boot files, BIOS and imports. The ARMSX2
-        // logo in PCSX2x6's red.
+        // Namco System 246/256 arcade games: their folder, boot files, BIOS and imports.
         DrawerItem("arcade.title", "👾", AppRoute.Arcade, glyphIcon = com.armsx2.R.drawable.ic_arcade),
     )
     // Link-out rows: they reuse the existing onAction path (like Boot BIOS) rather than a
@@ -236,6 +235,10 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // About left the settings tab strip: it is a read-only page, not a setting, and it sat in
         // the tab row costing a slot on every settings visit.
         DrawerItem("about.title", "ℹ️", AppRoute.About),
+        // Problems outside a game (or with the one running behind the library). In-game reports
+        // start from the pause menu, where the scene can be captured.
+        DrawerItem("bugreport.menu.title", "⚑",
+            onAction = { com.armsx2.ui.bugreport.BugReportFlow.openGeneral(context); onDismiss() }),
     )
     // Exit gets its own trailing section. It was briefly filed under ABOUT, next to the Discord and
     // GitHub links, where nobody would think to look for "quit".
@@ -369,7 +372,7 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     is AppRoute.Settings -> current is AppRoute.Settings
     is AppRoute.BiosManager -> current is AppRoute.BiosManager
     is AppRoute.MemoryCardManager -> current is AppRoute.MemoryCardManager
-    AppRoute.SaveManager -> current is AppRoute.SaveManager
+    is AppRoute.SaveManager -> current is AppRoute.SaveManager
     AppRoute.ControllerManager -> current is AppRoute.ControllerManager
     AppRoute.PatchManager -> current is AppRoute.PatchManager
     AppRoute.TextureManager -> current is AppRoute.TextureManager

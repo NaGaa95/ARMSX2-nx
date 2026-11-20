@@ -131,7 +131,11 @@ namespace Vulkan
 		void SetBlendConstants(float r, float g, float b, float a);
 		void SetNoBlendingState();
 
+		/// Declares a state dynamic; one already declared is left as it is.
 		void AddDynamicState(VkDynamicState state);
+		bool HasDynamicState(VkDynamicState state) const;
+		u32 GetVertexBufferCount() const { return m_vertex_input_state.vertexBindingDescriptionCount; }
+		u32 GetVertexAttributeCount() const { return m_vertex_input_state.vertexAttributeDescriptionCount; }
 
 		void SetDynamicViewportAndScissorState();
 		void SetViewport(float x, float y, float width, float height, float min_depth, float max_depth);

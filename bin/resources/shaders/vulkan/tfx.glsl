@@ -189,7 +189,6 @@ ProcessedVertex load_vertex(uint index)
 
 		vtx.t.xy = st;
 		#if VS_SPRITE_EDGE_CLAMP
-			// An FST sprite's ST carries its far-edge sample limit, normalised like the UV.
 			vtx.t.xy = st * TextureScale;
 		#endif
 		vtx.t.w = a_q;
@@ -239,6 +238,39 @@ vec2 get_aa1_triangle_expand_dir(ProcessedVertex v0, ProcessedVertex v1, Process
 	}
 
 	return line_expand;
+}
+
+// The console's UV sprite ramp (GSCoordinateWalk.h, GSSpriteRampBias): a texel-coordinate sprite walks
+// U (V) a hair below the exact coordinate from its second pixel on, on an axis where the coordinate
+// ascends by a whole number of sixteenths of a texel per pixel and the sprite's own pixel extent is not a
+// power of two. Where every sample point is on the sixteenth grid (the seed too), that hair reads the same
+// texel and the same 4-bit bilinear weight as a sixteenth, so the pixel shader lowers the coordinate by
+// a sixteenth. Off the grid the hair changes nothing, so the axis is left alone.
+//
+// Returns the value this corner carries in ST: the distance in pixels from halfway between the
+// sprite's first and second sampled pixel, so it interpolates to above zero exactly where the pixel
+// shader lowers the coordinate. -65536 on an axis that does not ramp. Positions and coordinates are the
+// raw 12.4 values; an XYOFFSET with a fractional pixel part would move the first pixel, which this ignores.
+//
+// The divisibility tests use no integer division, which GPUs without a divider expand into a long
+// sequence. step is du * 16 / dp rounded through a float divide; it is the step in sixteenths per pixel
+// exactly when it multiplies back to du * 16. Every operand is below 2^20 and so exact in a float, and a
+// quotient below 2^20 that is off by under 8 ulp still rounds to the whole number. The first sample lies
+// (first - p0) sixteenths of a pixel past p0, so its coordinate is on the sixteenth grid when
+// (first - p0) * step is a multiple of 16.
+float sprite_ramp_mark(uint pa, uint pb, uint ua, uint ub, uint corner)
+{
+	int p0 = int(min(pa, pb));
+	int p1 = int(max(pa, pb));
+	int du = pa <= pb ? int(ub) - int(ua) : int(ua) - int(ub);
+	int dp = p1 - p0;
+	// The first sampled pixel and the sampled extent, both in 12.4. The extent test is non-zero when the
+	// pixel count is neither zero nor a power of two.
+	int first = (p0 + 15) & ~15;
+	int extent = ((p1 + 15) & ~15) - first;
+	int step = int(float(du << 4) / float(dp) + 0.5f);
+	bool ramps = du > 0 && step * dp == (du << 4) && (extent & (extent - 1)) != 0 && (((first - p0) * step) & 15) == 0;
+	return ramps ? (float(int(corner) - first) / 16.0f - 0.5f) : -65536.0f;
 }
 
 mat2 get_inverse(mat2 mat, float det)
@@ -328,7 +360,12 @@ void main()
 	bool is_right = (vid & 1u) != 0u;
 	// Lines reach here as index pairs (a, a + 1) whatever the provoking vertex is; a provoking-first
 	// device gets its flat colours fixed on the CPU, not its indices reordered.
-	uint vid_other = is_bottom ? vid_base - 1 : vid_base + 1;
+	// vid_base counts from the draw's first vertex, BaseVertex is where that sits in the ring. No index
+	// names the bottom corner of vertex 0 or the top corner of the last vertex, but a GPU that shades
+	// every slot of the index range runs them, so neither read may leave the buffer: vertex 0 reads
+	// itself (vid_base - 1 would wrap to 2^32 - 1 when BaseVertex is 0), and the host leaves one vertex
+	// of ring slack after the draw for the last one.
+	uint vid_other = is_bottom ? max(vid_base, 1u) - 1u : vid_base + 1u;
 
 	vtx = load_vertex(vid_base);
 	ProcessedVertex other = load_vertex(vid_other);
@@ -372,6 +409,20 @@ void main()
 	vtx.p.y = is_bottom ? lt.p.y : vtx.p.y;
 	vtx.t.y = is_bottom ? lt.t.y : vtx.t.y;
 	vtx.ti.yw = is_bottom ? lt.ti.yw : vtx.ti.yw;
+
+	#if VS_SPRITE_RAMP
+		// An FST sprite does not use ST, so it carries the ramp marks (sprite_ramp_mark, PS_SPRITE_RAMP).
+		{
+			RawVertex r_lt = vertex_buffer[BaseVertex + vid_lt];
+			RawVertex r_rb = vertex_buffer[BaseVertex + vid_rb];
+			uvec2 p_lt = uvec2(bitfieldExtract(r_lt.XY, 0, 16), bitfieldExtract(r_lt.XY, 16, 16));
+			uvec2 p_rb = uvec2(bitfieldExtract(r_rb.XY, 0, 16), bitfieldExtract(r_rb.XY, 16, 16));
+			uvec2 uv_lt = uvec2(bitfieldExtract(r_lt.UV, 0, 16), bitfieldExtract(r_lt.UV, 16, 16));
+			uvec2 uv_rb = uvec2(bitfieldExtract(r_rb.UV, 0, 16), bitfieldExtract(r_rb.UV, 16, 16));
+			vtx.t.x = sprite_ramp_mark(p_lt.x, p_rb.x, uv_lt.x, uv_rb.x, is_right ? p_lt.x : p_rb.x);
+			vtx.t.y = sprite_ramp_mark(p_lt.y, p_rb.y, uv_lt.y, uv_rb.y, is_bottom ? p_lt.y : p_rb.y);
+		}
+	#endif
 
 #elif VS_EXPAND == VS_EXPAND_TRIANGLE_AA1
 
@@ -728,9 +779,14 @@ layout(set = 1, binding = 3) uniform texture2D PrimMinTexture;
 #endif
 
 #if ZWRITE && !PS_FEEDBACK_LOOP_IS_NEEDED_DEPTH
-// depth_less would allow conservative early-Z, but floor(z*2^32)*2^-32 can exceed z
-// due to float32 rounding, violating the depth_less contract and silently culling geometry.
-out float gl_FragDepth;
+// The depth written is never above gl_FragCoord.z, so the depth test may run before the
+// shader and again after it. The Z floor, floor(z * 2^32) * 2^-32, is exact in float32:
+// both multiplies only change the exponent (z * 2^32 is at most 2^32, and the floored
+// value is 0 or at least 1, so neither product leaves the normal range), and floor
+// returns a representable integer no greater than its argument. The Z clamp is a min().
+// The PS2 depth tests are GEQUAL and GREATER, under which a lower depth never turns a
+// failing fragment into a passing one.
+layout(depth_less) out float gl_FragDepth;
 #endif
 
 #if NEEDS_TEX
@@ -764,7 +820,23 @@ vec4 sample_c_af(vec2 uv, float uv_w)
 	// Below taken from https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm#7.18.11%20LOD%20Calculations
 	// And https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_filter_anisotropic.txt
 	// With guidance from https://pema.dev/2025/05/09/mipmaps-too-much-detail/ 
+#if DRIVER_NO_IMAGE_QUERY
+	// For drivers that can't use textureSize(): WH.zw is the TEX0 size at this scale, and the bound texture
+	// differs from it by the factors sample_c() maps uv with.
+	vec2 sz = WH.zw;
+	#if PS_ADJS
+		sz.x /= STRange.z;
+	#else
+		sz.x /= STScale.x;
+	#endif
+	#if PS_ADJT
+		sz.y /= STRange.w;
+	#else
+		sz.y /= STScale.y;
+	#endif
+#else
 	vec2 sz = textureSize(Texture, 0);
+#endif
 	vec2 dX = dFdx(uv) * sz;
 	vec2 dY = dFdy(uv) * sz;
 
@@ -1437,6 +1509,16 @@ vec4 ps_color()
 #else
 	vec2 st = vsIn.ti.xy;
 	vec2 st_int = vsIn.ti.zw;
+#endif
+
+#if PS_SPRITE_RAMP
+	// Past the sprite's first column/row on a ramping axis, a sixteenth of a texel low (sprite_ramp_mark).
+	// ST is the TEX0-normalised coordinate (TextureScale = 1/16 / WH.xy), ST_int the raw 12.4 one.
+	{
+		vec2 ramp = vec2(greaterThan(vsIn.t.xy, vec2(0.0f)));
+		st -= ramp / (16.0f * WH.xy);
+		st_int -= ramp;
+	}
 #endif
 
 #if PS_NATIVE_TEXEL_GRID

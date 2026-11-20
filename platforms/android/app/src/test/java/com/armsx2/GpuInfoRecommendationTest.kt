@@ -32,9 +32,9 @@ class GpuInfoRecommendationTest {
     }
 
     @Test
-    fun adreno8xxKeepsTheQualcommTunedPack() {
+    fun adreno8xxIsRecommendedStevenMXZsGen8Turnip() {
         for (r in listOf("Adreno (TM) 825", "Adreno (TM) 830", "Adreno (TM) 840"))
-            assertEquals(r, "GameHub 8Elite", GpuInfo.recommendation(r)?.sourceLabel)
+            assertEquals(r, "StevenMXZ · Adreno-Tools", GpuInfo.recommendation(r)?.sourceLabel)
     }
 
     @Test
@@ -43,9 +43,23 @@ class GpuInfoRecommendationTest {
         assertEquals("KIMCHI", GpuInfo.recommendation("Adreno (TM) 506")?.sourceLabel)
     }
 
+    // Mali parts malisx2 lists for get malisx2 — the same predicate the download list uses, so the
+    // card above the list never says "system" while the only listed driver is ours.
+    @Test
+    fun supportedMaliIsRecommendedMaliSX2() {
+        for (r in listOf(
+            "Mali-G57 MC2", "Mali-G78AE MC20", "Mali-G310 MC1", "Mali-G510 MC2", "Mali-G610 MC4", "Mali-G710 MC10",
+            "Mali-G615 MC6", "Mali-G715-Immortalis MC11", "Mali-G31 MP2", "Mali-G51 MP4", "Mali-G52 MC2", "Mali-G76 MC4",
+        ))
+            assertEquals(r, "ARMSX2 · MaliSX2", GpuInfo.recommendation(r)?.sourceLabel)
+    }
+
     @Test
     fun otherGpusGetNoRecommendation() {
-        for (r in listOf(null, "", "Mali-G715", "PowerVR B-Series BXM-8-256", "Xclipse 940"))
+        for (r in listOf(
+            null, "", "Mali", "Mali-G71 MP20", "Mali-G72 MP12", "Mali-G720 MC7", "Mali-T880 MP12",
+            "PowerVR B-Series BXM-8-256", "Xclipse 940",
+        ))
             assertNull(r.toString(), GpuInfo.recommendation(r))
     }
 }

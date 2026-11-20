@@ -101,7 +101,7 @@ void iopMemReset()
 	// but leaving it in for reference (air)
 	//for (i=0; i<0x0008; i++) psxMemWLUT[i + 0xbfc0] = (uptr)&psR[i << 16];
 
-	std::memset(iopMem, 0, sizeof(*iopMem));
+	SysMemory::ZeroData(iopMem, sizeof(*iopMem));
 	ACRAM::Clear(); // an arcade board's RAM resets with the IOP's (no-op on a console)
 }
 
@@ -132,7 +132,6 @@ static __fi void IopSbusWriteControl(u32 value)
 	});
 }
 
-// Replace the low half of a register word, keeping the high half.
 static __fi void IopSbusWriteLow16(u32& reg, u16 value)
 {
 	SharedWord::Update(reg, [value](u32 old) { return (old & 0xFFFF0000u) | value; });

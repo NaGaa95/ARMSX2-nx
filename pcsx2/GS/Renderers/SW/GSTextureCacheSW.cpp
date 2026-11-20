@@ -72,11 +72,17 @@ void GSTextureCacheSW::InvalidatePages(const GSOffset::PageLooper& pages, u32 ps
 				{
 					for (const GSVector2i& j : t->m_p2t[page])
 					{
+						if (valid[j.x] & ~j.y)
+							t->m_readers.Invalidated();
+
 						valid[j.x] &= j.y;
 					}
 				}
 				else
 				{
+					if (valid[page] != 0)
+						t->m_readers.Invalidated();
+
 					valid[page] = 0;
 				}
 
@@ -198,8 +204,7 @@ void GSTextureCacheSW::Texture::Reset(u32 tw0, const GIFRegTEX0& TEX0, const GIF
 
 	// m_sharedbits, m_pages and m_p2t are left as they were: only the software renderer's cache
 	// reads them, to invalidate a texture when its pages are written, and a texture that is reset
-	// never lives in that cache. Working them out cost a page walk on every draw of the hardware
-	// renderer's CPU sprite road.
+	// never lives in that cache.
 }
 
 bool GSTextureCacheSW::Texture::Update(const GSVector4i& rect)

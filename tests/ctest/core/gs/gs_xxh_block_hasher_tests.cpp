@@ -39,10 +39,8 @@ namespace
 
 		u32 RandomBlock() { return static_cast<u32>(m_rng() % kBlocksInMemory); }
 
-		/// What XXH3 gives for the bytes, hashed in one piece.
 		static u64 OneShot(const std::vector<u8>& bytes) { return XXH3_64bits(bytes.data(), bytes.size()); }
 
-		/// What the plain streaming update gives when it is fed the same pieces.
 		struct Reference
 		{
 			Reference() { XXH3_64bits_reset(&state); }
@@ -148,7 +146,8 @@ namespace
 				else
 				{
 					const size_t len = kSizes[m_rng() % (sizeof(kSizes) / sizeof(kSizes[0]))];
-					const u8* data = Block(RandomBlock()) + (m_rng() % 200); // not block aligned
+					// Not block aligned. The start stays far enough from the end of memory for the longest update.
+					const u8* data = Block(RandomBlock() % (kBlocksInMemory - 17)) + (m_rng() % 200);
 					GSXXH3_64bits_update(&hasher, data, len);
 					bytes.insert(bytes.end(), data, data + len);
 				}

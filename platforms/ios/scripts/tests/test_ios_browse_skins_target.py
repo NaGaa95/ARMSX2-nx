@@ -2,10 +2,11 @@
 
 import unittest
 
-from ios_source import SWIFT, read, without_comments
+from ios_source import read, swift, without_comments
 
 
-VIRTUAL_PAD = SWIFT / "Views/Settings/VirtualPadSettingsView.swift"
+VIRTUAL_PAD = swift("VirtualPadSettingsView.swift")
+CUSTOM_SKIN = swift("VirtualPadCustomSkinSection.swift")
 
 
 class BrowseSkinsIsATarget(unittest.TestCase):
@@ -15,7 +16,7 @@ class BrowseSkinsIsATarget(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.page = without_comments(read(VIRTUAL_PAD))
+        cls.page = without_comments(read(VIRTUAL_PAD) + read(CUSTOM_SKIN))
 
     def test_the_link_opens_its_pane_as_an_action_target(self):
         self.assertIn(".controllerAccessibilityActionTarget(", self.page)

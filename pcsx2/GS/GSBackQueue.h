@@ -276,6 +276,11 @@ namespace GSBackQueue
 		bool channel_shuffle_finish;
 		bool packed_uv_hack_flag;
 		DrawPrivRegs priv;
+		// The environment delta. draw_env and next_env hold only the 64-byte blocks whose bits are set here, at their
+		// own offsets; every other block equals what the previous draw record carried, which the consumer keeps
+		// (GSState::m_rec_env). env_full: the whole of both environments is valid (the producer's first record).
+		u16 env_blocks[2];
+		bool env_full;
 	};
 
 	// ------------------------------------------------------------------
@@ -380,9 +385,8 @@ namespace GSBackQueue
 	// The producer spins briefly on its condition, then arms the wait, re-checks,
 	// and sleeps with a timeout. The timeout is what normally ends the sleep: the
 	// producer wakes on its own and re-checks, so the consumer pays nothing. A
-	// futex post costs the consumer ~5us on a Dimensity 8300, and the consumer is
-	// usually the bottleneck when the producer waits, so posting per batch made
-	// frames slower there. The consumer posts only as a starvation guard: when it
+	// futex post is costly for the consumer, which is usually the bottleneck when
+	// the producer waits. The consumer posts only as a starvation guard: when it
 	// is down to kLowWater queued records while the producer is still asleep, or
 	// when it runs out of records. The producer halves its timeout after each
 	// such post and lengthens it slowly after each wake that came too early
@@ -394,8 +398,7 @@ namespace GSBackQueue
 	// NotifyRetired has no fence and may see the arming late, which only delays
 	// the wake: the consumer passes NotifyIdle before it sleeps, and by then the
 	// ring is empty and every pool node is back, so any condition the producer
-	// can wait on holds. Independently of all that, a missed post costs at most
-	// one timeout, never a hang.
+	// can wait on holds. A missed post costs at most one timeout, never a hang.
 	//
 	// Exactly one Post per armed wait that the consumer claims. A producer that
 	// disarms itself (condition met on re-check, or timed out) and finds the
@@ -471,8 +474,7 @@ namespace GSBackQueue
 
 	private:
 		static constexpr u32 kSpinNs = 4000;
-		// Queued records left when the guard posts. At ~3us a draw on the
-		// slowest target this is ~50us of work, about one futex wake-up.
+		// Queued records left when the guard posts: enough work (~50us) to cover one futex wake-up.
 		static constexpr u32 kLowWater = 16;
 
 		void Wake()

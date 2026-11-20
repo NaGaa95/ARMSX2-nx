@@ -93,6 +93,13 @@ fun FixesTab(state: MutableState<Settings>) {
             field = "disableFramebufferFetch",
         ) { apply(s.copy(display = s.display.copy(disableFramebufferFetch = it))) }
         SettingsDivider()
+        ToggleRow(
+            str("fixes.disableSwapChainPreRotation.label"),
+            s.display.disableSwapChainPreRotation,
+            description = str("fixes.disableSwapChainPreRotation.desc"),
+            field = "disableSwapChainPreRotation",
+        ) { apply(s.copy(display = s.display.copy(disableSwapChainPreRotation = it))) }
+        SettingsDivider()
         SegmentedRow(
             label = str("fixes.overrideTextureBarriers.label"),
             options = listOf(str("fixes.opt.auto"), str("fixes.opt.off"), str("fixes.opt.on")),
@@ -543,6 +550,8 @@ fun FixesTab(state: MutableState<Settings>) {
         SettingsDivider()
         RecompilerSection(state)
         SettingsDivider()
+        MemorySection(state)
+        SettingsDivider()
         PineSection(state)
         Spacer(Modifier.height(8.dp))
     }
@@ -570,6 +579,24 @@ private fun PineSection(state: MutableState<Settings>) {
             field = "pineEnabled",
         ) { apply(s.copy(emuCore = s.emuCore.copy(pineEnabled = it))) }
         if (s.emuCore.pineEnabled) HelpText("adb forward tcp:${s.emuCore.pineSlot} tcp:${s.emuCore.pineSlot}")
+    }
+}
+
+/** Extended RAM: the 128MB EE / 8MB IOP map of a development console. Not inside the recompiler
+ *  section, whose warning says its changes reach the running game: the core sizes guest memory
+ *  only when a game boots or resets, so this one waits for the next boot. */
+@Composable
+private fun MemorySection(state: MutableState<Settings>) {
+    val s = state.value
+    fun apply(updated: Settings) = InGameOverlay.saveSettings(updated)
+
+    CollapsibleSection(str("fixes.section.memory")) {
+        ToggleRow(
+            str("fixes.extraMemory.label"),
+            s.cpu.extraMemory,
+            description = str("fixes.extraMemory.desc"),
+            field = "extraMemory",
+        ) { apply(s.copy(cpu = s.cpu.copy(extraMemory = it))) }
     }
 }
 

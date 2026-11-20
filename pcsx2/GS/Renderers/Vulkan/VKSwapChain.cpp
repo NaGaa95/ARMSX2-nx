@@ -77,6 +77,13 @@ VKSwapChain::~VKSwapChain()
 
 VkSurfaceKHR VKSwapChain::CreateVulkanSurface(VkInstance instance, VkPhysicalDevice physical_device, WindowInfo* wi)
 {
+	// Every window type but VK_KHR_display needs a native window, and the platform functions crash on a null one.
+	if (wi->type != WindowInfo::Type::VulkanDirect && !wi->window_handle && !wi->surface_handle)
+	{
+		Console.Error("VK: The window has no native handle, not creating a surface.");
+		return VK_NULL_HANDLE;
+	}
+
 #if defined(VK_USE_PLATFORM_WIN32_KHR)
 	if (wi->type == WindowInfo::Type::Win32)
 	{
@@ -355,12 +362,31 @@ void VKSwapChain::DestroyVulkanSurface(VkInstance instance, WindowInfo* wi, VkSu
 #endif
 }
 
+// Whether the device's present queue can present to the surface. A device opened before its window had a
+// surface picked that queue without one to ask. The validation layers also want this asked before a swap
+// chain is made on a surface.
+static bool PresentQueueSupportsSurface(VkSurfaceKHR surface)
+{
+	const GSDeviceVK* dev = GSDeviceVK::GetInstance();
+	VkBool32 present_supported = VK_FALSE;
+	const VkResult res = vkGetPhysicalDeviceSurfaceSupportKHR(
+		dev->GetPhysicalDevice(), dev->GetPresentQueueFamilyIndex(), surface, &present_supported);
+	if (res != VK_SUCCESS)
+	{
+		LOG_VULKAN_ERROR(res, "vkGetPhysicalDeviceSurfaceSupportKHR failed: ");
+		return false;
+	}
+	if (!present_supported)
+		Console.Error("VK: Queue family %u cannot present to this surface.", dev->GetPresentQueueFamilyIndex());
+	return present_supported;
+}
+
 std::unique_ptr<VKSwapChain> VKSwapChain::Create(const WindowInfo& wi, VkSurfaceKHR surface,
 	VkPresentModeKHR present_mode, std::optional<bool> exclusive_fullscreen_control)
 {
 	std::unique_ptr<VKSwapChain> swap_chain =
 		std::unique_ptr<VKSwapChain>(new VKSwapChain(wi, surface, present_mode, exclusive_fullscreen_control));
-	if (!swap_chain->CreateSwapChain())
+	if (!PresentQueueSupportsSurface(surface) || !swap_chain->CreateSwapChain())
 		return nullptr;
 
 	return swap_chain;
@@ -550,9 +576,12 @@ static VkSurfaceTransformFlagBitsKHR SurfaceTransformFromRotation(DisplayRotatio
 
 // The rotation the surface wants pre-rotated: its currentTransform, or where the window system does
 // not report one through Vulkan (Wayland), the one the frontend read from the window system, if the
-// surface accepts it as a preTransform.
+// surface accepts it as a preTransform. None when the user turned pre-rotation off.
 static DisplayRotation WantedSurfaceRotation(const VkSurfaceCapabilitiesKHR& caps, const WindowInfo& wi)
 {
+	if (GSConfig.DisableSwapChainPreRotation)
+		return DisplayRotation::Rot0;
+
 	if (caps.supportedTransforms & caps.currentTransform)
 	{
 		const DisplayRotation reported = RotationFromSurfaceTransform(caps.currentTransform);
@@ -631,7 +660,7 @@ bool VKSwapChain::SelectPresentMode(VkSurfaceKHR surface, GSVSyncMode* vsync_mod
 	// off, which resolves to MAILBOX here — LSFG reported "active" and both counters read 59.
 	//
 	// Gated on the setting rather than GSLsfg::IsAvailable(), which cannot answer yet: the DLL
-	// path only reaches GSLsfg from EndPresent, which has not run when the swapchain is built.
+	// path only reaches GSLsfg from the present path, which has not run when the swapchain is built.
 	// The user asking for frame generation is the intent worth honouring here.
 	if (GSConfig.LsfgEnabled && *vsync_mode != GSVSyncMode::FIFO)
 	{
@@ -704,10 +733,47 @@ bool VKSwapChain::SelectPresentMode(VkSurfaceKHR surface, GSVSyncMode* vsync_mod
 	return true;
 }
 
+bool VKSwapChain::SurfaceListsNoFormats(VkSurfaceKHR surface)
+{
+	u32 format_count = 0;
+	return vkGetPhysicalDeviceSurfaceFormatsKHR(
+			   GSDeviceVK::GetInstance()->GetPhysicalDevice(), surface, &format_count, nullptr) == VK_SUCCESS &&
+		   format_count == 0;
+}
+
 bool VKSwapChain::CreateSwapChain()
 {
 	// Select swap chain format
 	std::optional<VkSurfaceFormatKHR> surface_format = SelectSurfaceFormat(m_surface);
+
+	// Arm's Wayland WSI sometimes gives a surface an empty format list that never refills. A new surface
+	// fetches them again, so drop the swap chain and recreate the surface.
+	static constexpr u32 MAX_EMPTY_SURFACE_RECREATES = 3;
+	for (u32 attempt = 1; !surface_format.has_value() && attempt <= MAX_EMPTY_SURFACE_RECREATES &&
+						  SurfaceListsNoFormats(m_surface);
+		 attempt++)
+	{
+		Console.Warning("VK: the surface listed no formats; recreating it (%u of %u).", attempt,
+			MAX_EMPTY_SURFACE_RECREATES);
+		// DestroySwapChain() zeroes the surface size, which the new swap chain needs on a surface with no
+		// fixed extent (a resize has only just set it).
+		const u32 surface_width = m_window_info.surface_width;
+		const u32 surface_height = m_window_info.surface_height;
+		DestroySwapChain();
+		DestroySurface();
+		m_window_info.surface_width = surface_width;
+		m_window_info.surface_height = surface_height;
+		m_surface = CreateVulkanSurface(
+			GSDeviceVK::GetInstance()->GetVulkanInstance(), GSDeviceVK::GetInstance()->GetPhysicalDevice(), &m_window_info);
+		if (m_surface == VK_NULL_HANDLE)
+			return false;
+
+		// The validation layers want this asked before a swap chain is made on the surface.
+		VkBool32 present_supported = VK_FALSE;
+		vkGetPhysicalDeviceSurfaceSupportKHR(GSDeviceVK::GetInstance()->GetPhysicalDevice(),
+			GSDeviceVK::GetInstance()->GetPresentQueueFamilyIndex(), m_surface, &present_supported);
+		surface_format = SelectSurfaceFormat(m_surface);
+	}
 	if (!surface_format.has_value())
 		return false;
 
@@ -729,10 +795,13 @@ bool VKSwapChain::CreateSwapChain()
 	// image lets the GPU work on N+2 while N is on-screen and N+1 is queued, recovering
 	// ~33% throughput. Default to 3 images for VulkanDirect, and for MAILBOX
 	// present mode regardless of WSI.
+	// IMMEDIATE too: it never waits for vblank, so a third image adds no latency, and with two the acquire
+	// waits for the compositor to release the previous frame.
 	const bool use_triple =
 		(m_window_info.type == WindowInfo::Type::VulkanDirect) ||
 		(m_window_info.type == WindowInfo::Type::VI) ||
-		(m_present_mode == VK_PRESENT_MODE_MAILBOX_KHR);
+		(m_present_mode == VK_PRESENT_MODE_MAILBOX_KHR) ||
+		(m_present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR);
 	u32 desired_image_count = use_triple ? 3 : 2;
 
 	// ★ Frame generation needs images it can hold ON TOP of the one being presented.
@@ -752,7 +821,8 @@ bool VKSwapChain::CreateSwapChain()
 	//
 	// This is still only a REQUEST. The clamp below and the driver get the final say, which is
 	// why the budget is recomputed from the real numbers afterwards instead of being assumed.
-	if (GSConfig.LsfgEnabled)
+	m_sized_for_frame_generation = GSConfig.LsfgEnabled;
+	if (m_sized_for_frame_generation)
 	{
 		const u32 extra = std::max<u32>(GSConfig.LsfgMultiplier, 2u) - 1u;
 		desired_image_count = std::max(desired_image_count, surface_capabilities.minImageCount + extra);
@@ -844,10 +914,11 @@ bool VKSwapChain::CreateSwapChain()
 			case WindowInfo::Type::Wayland:     wsi_name = "Wayland"; break;
 			case WindowInfo::Type::MacOS:       wsi_name = "MacOS"; break;
 			case WindowInfo::Type::VulkanDirect: wsi_name = "VulkanDirect"; break;
+			case WindowInfo::Type::Android:      wsi_name = "Android"; break;
 		}
 		Console.WriteLnFmt(
 			"Vulkan: Swapchain {}x{} fmt={} colorspace={} present={} images={} (desired={} min={} max={}) wsi={} "
-			"surface_transform=0x{:x} supported=0x{:x} window_rotation={} pre_rotation={} image_size={}x{}",
+			"surface_transform=0x{:x} supported=0x{:x} window_rotation={} pre_rotation={} image_size={}x{}{}",
 			size.width, size.height, static_cast<unsigned>(surface_format->format),
 			static_cast<unsigned>(surface_format->colorSpace),
 			PresentModeToString(m_present_mode), image_count,
@@ -855,7 +926,8 @@ bool VKSwapChain::CreateSwapChain()
 			wsi_name, static_cast<unsigned>(surface_capabilities.currentTransform),
 			static_cast<unsigned>(surface_capabilities.supportedTransforms),
 			static_cast<unsigned>(m_window_info.surface_rotation) * 90u,
-			static_cast<unsigned>(m_pre_rotation) * 90u, image_size.width, image_size.height);
+			static_cast<unsigned>(m_pre_rotation) * 90u, image_size.width, image_size.height,
+			GSConfig.DisableSwapChainPreRotation ? " (pre-rotation off by setting)" : "");
 	}
 
 	VkCompositeAlphaFlagBitsKHR alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -1179,10 +1251,15 @@ bool VKSwapChain::SetPresentMode(VkPresentModeKHR present_mode)
 	if (m_present_mode == present_mode)
 		return true;
 
-	m_present_mode = present_mode;
-
 	// Recreate the swap chain with the new present mode.
 	INFO_LOG("Recreating swap chain to change present mode.");
+	return RebuildSwapChain(present_mode);
+}
+
+bool VKSwapChain::RebuildSwapChain(VkPresentModeKHR present_mode)
+{
+	m_present_mode = present_mode;
+
 	ReleaseCurrentImage();
 	DestroySwapChainImages();
 	if (!CreateSwapChain())
@@ -1207,20 +1284,8 @@ bool VKSwapChain::RecreateSurface(const WindowInfo& new_wi)
 	if (m_surface == VK_NULL_HANDLE)
 		return false;
 
-	// The validation layers get angry at us if we don't call this before creating the swapchain.
-	VkBool32 present_supported = VK_TRUE;
-	VkResult res = vkGetPhysicalDeviceSurfaceSupportKHR(GSDeviceVK::GetInstance()->GetPhysicalDevice(),
-		GSDeviceVK::GetInstance()->GetPresentQueueFamilyIndex(), m_surface, &present_supported);
-	if (res != VK_SUCCESS)
-	{
-		LOG_VULKAN_ERROR(res, "vkGetPhysicalDeviceSurfaceSupportKHR failed: ");
+	if (!PresentQueueSupportsSurface(m_surface))
 		return false;
-	}
-	if (!present_supported)
-	{
-		pxFailRel("Recreated surface does not support presenting.");
-		return false;
-	}
 
 	// Finally re-create the swap chain
 	if (!CreateSwapChain())

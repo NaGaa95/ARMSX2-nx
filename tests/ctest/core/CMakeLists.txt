@@ -1,5 +1,8 @@
 add_pcsx2_test(core_test
 	ee_fpu_regfile_tests.cpp
+	gif_tag_analyze_tests.cpp
+	soundtouch_crosscorr_tests.cpp
+	gif_path_buffer_tests.cpp
 	ee_clamp_mode_tests.cpp
 	vu_clamp_mode_tests.cpp
 	vuaot_setting_tests.cpp
@@ -13,9 +16,12 @@ add_pcsx2_test(core_test
 	autotune_trace_tests.cpp
 	iop_fingerprint_tests.cpp
 	iop_thread_mode_tests.cpp
+	iop_thread_gamedb_tests.cpp
 	iop_thread_placement_tests.cpp
 	iop_thread_metrics_tests.cpp
 	iop_thread_channels_tests.cpp
+	iop_lag_control_tests.cpp
+	iop_lag_rules_tests.cpp
 	iop_thread_tests.cpp
 	iop_thread_lockstep_tests.cpp
 	iop_thread_queue_tests.cpp
@@ -27,13 +33,18 @@ add_pcsx2_test(core_test
 	iop_thread_fpcr_tests.cpp
 	iop_thread_threaded_tests.cpp
 	pad_input_tests.cpp
+	pad_script_tests.cpp
+	trigger_rest_deadzone_tests.cpp
 	shared_word_tests.cpp
+	audio_stream_tests.cpp
 	IopThreadTestSupport.h
+	SifRestartTestSupport.h
 	StubHostTasks.h
 	sif_pump_tests.cpp
 	sbus_tests.cpp
 	savestate_legacy_tests.cpp
 	settings_precedence_tests.cpp
+	settings_migration_tests.cpp
 	gsrunner_affinity_tests.cpp
 	headless_shot_tests.cpp
 	onscreen_keyboard_tests.cpp
@@ -42,9 +53,14 @@ add_pcsx2_test(core_test
 	ee_cycle_rate_controller_tests.cpp
 	ee_cycle_rate_eligibility_tests.cpp
 	ee_cycle_rate_sampler_tests.cpp
+	memcard_folder_tests.cpp
 	MockMemoryInterface.h
 	StubHost.cpp
 )
+
+# The game database tests parse the real GameIndex.yaml and the mobile overlay from the source tree.
+set_source_files_properties(iop_thread_gamedb_tests.cpp PROPERTIES COMPILE_DEFINITIONS
+	"ARMSX2_GAMEINDEX_YAML=\"${CMAKE_SOURCE_DIR}/bin/resources/GameIndex.yaml\";ARMSX2_GAMEDB_OVERLAY_YAML=\"${CMAKE_SOURCE_DIR}/bin/resources-overlay/armsx2_overrides.yaml\"")
 
 # gsrunner_affinity_tests.cpp includes the runner's own -affinity parse header; the flag
 # decides which cores a measurement round runs on, so it is worth a test even though the
@@ -57,11 +73,14 @@ if(ARCH_ARM64)
 	# Phase 0.6: ARM64 JIT toolchain smoke test (emit + execute ARM64 code).
 	target_sources(core_test PRIVATE arm64_emit_test.cpp)
 	target_sources(core_test PRIVATE arm64_lane_gather_tests.cpp)
+	target_sources(core_test PRIVATE arm64_block_lut_tests.cpp)
 endif()
 
-# GSLsfg.cpp only builds with the Vulkan renderer, so its structural-PE-check test follows it.
+# GSLsfg.cpp only builds with the Vulkan renderer, so its tests follow it.
 if(USE_VULKAN)
 	target_sources(core_test PRIVATE lsfg_dll_check_tests.cpp)
+	target_sources(core_test PRIVATE lsfg_swap_chain_rebuild_tests.cpp)
+	target_sources(core_test PRIVATE vk_window_system_tests.cpp)
 endif()
 
 # The recompiler differential-test harness drives the arm64 JIT through
@@ -82,6 +101,9 @@ add_subdirectory(catalog)
 
 # Namco arcade cabinet controls and library entries.
 add_subdirectory(arcade)
+
+# SPU2 mixer against a frozen copy of itself.
+add_subdirectory(spu2)
 
 
 set(multi_isa_sources
@@ -155,3 +177,7 @@ if(WIN32 AND TARGET SDL3::SDL3)
 			COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${SDL3_DLL_PATH}" "$<TARGET_FILE_DIR:core_test>")
 	endif()
 endif()
+
+# soundtouch_crosscorr_tests reaches TDStretch, a SoundTouch source header the library does not export.
+target_include_directories(core_test PRIVATE ${CMAKE_SOURCE_DIR}/3rdparty/soundtouch/source/SoundTouch)
+target_link_libraries(core_test PRIVATE SoundTouch::SoundTouch)

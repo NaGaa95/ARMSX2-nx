@@ -112,11 +112,10 @@ fun RendererTab(state: MutableState<Settings>) {
             // one, so the control lives with the driver rather than buried lower in the tab.
             ClearShaderCacheRow()
             SettingsDivider()
-            // GS Multi-threading (the GS front/back thread split), placed right under the
-            // renderer/driver picker. Off (0, the default) = single-threaded GS; on (any
-            // other value; written as 1, older builds wrote 3) = GS rendering on a second
-            // thread. Restart-required (in RestartOptionsAreEqual); native-lib snapshots the
-            // field across a live apply, so it only takes effect on the next game boot.
+            // GS multi-threading (the GS front/back thread split). 0 (the default) = single-threaded
+            // GS; any other value (written as 1) = GS rendering on a second thread. Restart-required
+            // (in RestartOptionsAreEqual): native-lib snapshots the field across a live apply, so it
+            // only takes effect on the next game boot.
             ToggleRow(
                 str("renderer.gsBackThread.label"),
                 s.display.gsBackThreadMode != 0,
@@ -332,6 +331,51 @@ fun RendererTab(state: MutableState<Settings>) {
                 onChange = { apply(s.copy(output = s.output.copy(landscapeRenderTop = it == 1))) },
                 field = "landscapeRenderTop",
             )
+            SettingsDivider()
+            // Side-by-side VR for phone headsets: the game drawn once in each half of the screen.
+            // Live via NativeApp.setSideBySideVR (through applyTo). The sliders only move the two
+            // pictures, so they show only while it is on.
+            ToggleRow(
+                str("renderer.vr.label"),
+                s.output.vrSideBySide,
+                description = str("renderer.vr.description"),
+                field = "vrSideBySide",
+            ) {
+                apply(s.copy(output = s.output.copy(vrSideBySide = it)))
+            }
+            if (s.output.vrSideBySide) {
+                IntSliderRow(
+                    label = str("renderer.vr.size"),
+                    value = s.output.vrSize,
+                    min = 30,
+                    max = 100,
+                    description = str("renderer.vr.size.description"),
+                    valueFormatter = { "${it}%" },
+                    onReset = { apply(s.copy(output = s.output.copy(vrSize = 80))) },
+                    field = "vrSize",
+                    onChange = { apply(s.copy(output = s.output.copy(vrSize = it))) },
+                )
+                IntSliderRow(
+                    label = str("renderer.vr.distance"),
+                    value = s.output.vrDistance,
+                    min = -100,
+                    max = 100,
+                    description = str("renderer.vr.distance.description"),
+                    onReset = { apply(s.copy(output = s.output.copy(vrDistance = 0))) },
+                    field = "vrDistance",
+                    onChange = { apply(s.copy(output = s.output.copy(vrDistance = it))) },
+                )
+                IntSliderRow(
+                    label = str("renderer.vr.height"),
+                    value = s.output.vrHeight,
+                    min = -100,
+                    max = 100,
+                    description = str("renderer.vr.height.description"),
+                    onReset = { apply(s.copy(output = s.output.copy(vrHeight = 0))) },
+                    field = "vrHeight",
+                    onChange = { apply(s.copy(output = s.output.copy(vrHeight = it))) },
+                )
+            }
             SettingsDivider()
             // Auto Progressive Scan — holds Triangle+Cross through boot, the combo some titles
             // probe to offer 480p progressive. Takes effect on the next boot (it is a boot-time
@@ -819,7 +863,6 @@ private fun TexturePackImportRow() {
                 )
             }
         }
-        // .zip / .tar.zst import — extracts the archive into the same per-game replacements folder.
         Box(
             Modifier
                 .fillMaxWidth()
@@ -1100,9 +1143,10 @@ private fun ClearShaderCacheRow() {
 }
 
 /** Delete the on-disk compiled shader/pipeline caches: every renderer's files, their debug
- *  variants, the per-game pipeline key lists, the frame-generation SPIR-V and any temporary file a
- *  killed write left behind. They rebuild on the next renderer init. Same set as the core's
- *  GSCacheFile::DeleteAll. Returns how many files were removed. */
+ *  variants, the per-game shader packs (gs_packs/), the pipeline key lists of older builds, the
+ *  frame-generation SPIR-V and any temporary file a killed write left behind. They rebuild on the
+ *  next renderer init. Same set as the core's GSCacheFile::DeleteAll. Returns how many files were
+ *  removed. */
 private fun clearShaderCache(cacheDir: File): Int {
     val prefixes = listOf("vulkan_shaders", "vulkan_pipelines", "gl_programs", "lsfg_spirv")
     var removed = 0
@@ -1110,8 +1154,14 @@ private fun clearShaderCache(cacheDir: File): Int {
         if (f.isFile && prefixes.any { f.name.startsWith(it) } && runCatching { f.delete() }.getOrDefault(false))
             removed++
     }
-    File(cacheDir, "vulkan_pipeline_keys").listFiles()?.forEach { f ->
-        if (runCatching { f.delete() }.getOrDefault(false)) removed++
+    for (dir in listOf("vulkan_pipeline_keys", "gs_packs")) {
+        File(cacheDir, dir).walkBottomUp().forEach { f ->
+            if (f.isFile) {
+                if (runCatching { f.delete() }.getOrDefault(false)) removed++
+            } else {
+                runCatching { f.delete() }
+            }
+        }
     }
     return removed
 }
@@ -1128,8 +1178,11 @@ private fun GsDumpCaptureRow() {
                 if (MainActivityRuntime.eState.value == com.armsx2.EmuState.STOPPED) {
                     Toast.makeText(context, I18n.get("renderer.gsDump.startGameFirst"), Toast.LENGTH_LONG).show()
                 } else {
-                    runCatching { NativeApp.captureGsDump(1) }
-                    Toast.makeText(context, I18n.get("renderer.gsDump.queued"), Toast.LENGTH_LONG).show()
+                    // The same choice as the pause menu's: keep the dump, or send it with a report.
+                    com.armsx2.ui.bugreport.askGsDumpChoice {
+                        runCatching { NativeApp.captureGsDump(1) }
+                        Toast.makeText(context, I18n.get("renderer.gsDump.queued"), Toast.LENGTH_LONG).show()
+                    }
                 }
             }
             .padding(horizontal = 6.dp, vertical = 5.dp),

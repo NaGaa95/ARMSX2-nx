@@ -48,8 +48,19 @@ void Host::ReportInfoAsync(const std::string_view title, const std::string_view 
 {
 }
 
+static std::mutex s_error_reports_mutex;
+static std::vector<StubHost::ErrorReport> s_error_reports;
+
+std::vector<StubHost::ErrorReport> StubHost::TakeErrorReports()
+{
+	std::lock_guard lock(s_error_reports_mutex);
+	return std::exchange(s_error_reports, {});
+}
+
 void Host::ReportErrorAsync(const std::string_view title, const std::string_view message)
 {
+	std::lock_guard lock(s_error_reports_mutex);
+	s_error_reports.push_back({std::string(title), std::string(message)});
 }
 
 void Host::OpenURL(const std::string_view url)
@@ -164,7 +175,7 @@ void Host::OnSaveStateSaved(const std::string_view filename)
 }
 
 // A task posted for the CPU thread is kept for a test to look at and run. Nothing else in the test binary
-// runs a CPU thread, so a task nobody takes is simply never run, as before.
+// runs a CPU thread, so a task nobody takes is simply never run.
 static std::mutex s_cpu_thread_tasks_mutex;
 static std::vector<StubHost::CpuThreadTask> s_cpu_thread_tasks;
 

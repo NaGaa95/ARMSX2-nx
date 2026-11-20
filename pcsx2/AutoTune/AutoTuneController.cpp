@@ -22,6 +22,7 @@ namespace
 		"gs-back-thread",
 		"download-mode",
 		"blending",
+		"display-scale",
 	};
 	static_assert(std::size(kLeverNames) == static_cast<size_t>(AutoTuneLever::Count));
 
@@ -35,24 +36,35 @@ namespace
 	};
 	static_assert(std::size(kBottleneckNames) == static_cast<size_t>(AutoTuneBottleneck::Count));
 
+	// The download modes a trial steps through, from the one that gives up the least to the one that gives up the
+	// most. See AutoTuneController::TargetFor for how the current mode picks its place on it.
+	constexpr int kDownloadLadder[] = {
+		AutoTuneDownloadMode::Asynchronous,
+		AutoTuneDownloadMode::NoReadbacks,
+		AutoTuneDownloadMode::Disabled,
+	};
+
 	// The order a bottleneck's levers are tried in. Every lever is tried at most once per value, so a lever
 	// that is not applicable (already on, forbidden, forced by the game database) is skipped.
 	constexpr AutoTuneLever kEeOrder[] = {AutoTuneLever::IopThread, AutoTuneLever::EeGovernor};
 	// The GS threads are the cause and the GPU is not: the back thread splits the CPU work, so it goes first.
 	constexpr AutoTuneLever kGsCpuOrder[] = {AutoTuneLever::GsBackThread, AutoTuneLever::Resolution,
 		AutoTuneLever::DownloadMode, AutoTuneLever::Blending};
-	// The GPU is the cause: resolution is the lever that moves the GPU's work most. Then the download mode, ahead of
-	// the back thread: a stall on readbacks reads as the GPU (the EE blocked on a GS that is not CPU-bound), the
-	// mode is cheap to try (the light settle, no renderer reopen), and the back thread costs two renderer reopens
-	// when it does not help (OutRun and Need for Speed on the MQ65: 18 s late for it).
-	constexpr AutoTuneLever kGpuOrder[] = {AutoTuneLever::Resolution, AutoTuneLever::DownloadMode,
-		AutoTuneLever::GsBackThread, AutoTuneLever::Blending};
+	// The GPU is the cause. The display scale goes first: it only takes the output surface down to the size the
+	// game is rendered at, so the picture loses nothing the render had, and the GPU stops scaling it up to the
+	// screen. It is offered only where the output is bigger than the render. Then the resolution, which moves the
+	// GPU's work most. Then the download mode, ahead of the back thread: a stall on readbacks reads as the GPU
+	// (the EE blocked on a GS that is not CPU-bound), the mode is cheap to try (the light settle, no renderer
+	// reopen), and the back thread costs two renderer reopens when it does not help.
+	constexpr AutoTuneLever kGpuOrder[] = {AutoTuneLever::DisplayScale, AutoTuneLever::Resolution,
+		AutoTuneLever::DownloadMode, AutoTuneLever::GsBackThread, AutoTuneLever::Blending};
 	// The same two when the game is so far under full speed that a notch of resolution cannot close the gap
-	// (AutoTunePolicy::cheap_levers_first_below_pct): blending and the download mode go before resolution.
+	// (AutoTunePolicy::cheap_levers_first_below_pct): blending and the download mode go before resolution. The
+	// display scale is still first: it costs no picture quality, so there is nothing to weigh it against.
 	constexpr AutoTuneLever kGsCpuFarOrder[] = {AutoTuneLever::GsBackThread, AutoTuneLever::Blending,
 		AutoTuneLever::DownloadMode, AutoTuneLever::Resolution};
-	constexpr AutoTuneLever kGpuFarOrder[] = {AutoTuneLever::Blending, AutoTuneLever::DownloadMode,
-		AutoTuneLever::Resolution, AutoTuneLever::GsBackThread};
+	constexpr AutoTuneLever kGpuFarOrder[] = {AutoTuneLever::DisplayScale, AutoTuneLever::Blending,
+		AutoTuneLever::DownloadMode, AutoTuneLever::Resolution, AutoTuneLever::GsBackThread};
 
 	double Mean(double sum, size_t n)
 	{
@@ -251,11 +263,8 @@ AutoTuneBottleneck AutoTuneController::Classify(const AutoTuneWindow& m) const
 
 	if (m.mtvu_pct >= sat)
 		return AutoTuneBottleneck::Vu1;
-	// The IOP thread is the cause when the EE is stuck waiting for it: the EE then reads as saturated too (it
-	// spins), and the levers for an EE-bound game would not help. Its own CPU share is not evidence of that on
-	// its own: it paces itself against the EE and spins while it waits, so it reads saturated whenever the EE
-	// is, and the EE waiting 0% of its time for it says it keeps up. The CPU share is the answer only where the
-	// wait could not be measured.
+	// The IOP thread is the cause when the EE is stuck waiting for it; the EE spins there, so it reads saturated
+	// too. The IOP's own CPU share counts only where the wait could not be measured: it spins while it waits.
 	const bool iop_bound = m.ee_wait_iop_ratio.has_value() ? ee_blocked_on_iop : m.iop_pct >= sat;
 	if (iop_bound)
 		return AutoTuneBottleneck::Iop;
@@ -297,8 +306,7 @@ std::optional<double> AutoTuneController::TargetFor(AutoTuneLever lever, const A
 		{
 			if (!s.hw_renderer)
 				return std::nullopt;
-			// The largest notch below the current multiplier, never under the first notch (1x).
-			// A multiplier already at or under the first notch has nowhere to go.
+			// The largest notch below the current multiplier; at or under the first notch there is nowhere to go.
 			const auto& notches = m_policy.resolution_notches;
 			if (notches.empty() || s.resolution <= notches.front() + kValueEpsilon)
 				return std::nullopt;
@@ -317,24 +325,72 @@ std::optional<double> AutoTuneController::TargetFor(AutoTuneLever lever, const A
 			return std::nullopt;
 
 		case AutoTuneLever::DownloadMode:
+		{
 			if (!s.hw_renderer || s.download_mode_forced)
 				return std::nullopt;
-			// Only a mode that reads back has anything to give up. Accurate and Force Full both read back
-			// and wait for it; Asynchronous reads back without making the EE wait; No Readbacks stops.
-			if (s.download_mode == AutoTuneDownloadMode::Accurate || s.download_mode == AutoTuneDownloadMode::AccurateForceFull)
-				return static_cast<double>(AutoTuneDownloadMode::Asynchronous);
-			if (s.download_mode == AutoTuneDownloadMode::Asynchronous)
-				return static_cast<double>(AutoTuneDownloadMode::NoReadbacks);
+
+			// The first rung of kDownloadLadder the current mode has not reached yet.
+			// Accurate and Force Full both read back and make the EE wait for it, so every rung is ahead of them;
+			// Asynchronous reads back without the wait, No Readbacks stops reading back, Disabled also stops the EE
+			// waiting on the GS thread. Unsynchronized is not on the ladder: it is a deliberate choice, and not a
+			// deterministic one, so it is left where the player put it.
+			size_t next;
+			switch (s.download_mode)
+			{
+				case AutoTuneDownloadMode::Accurate:
+				case AutoTuneDownloadMode::AccurateForceFull:
+					next = 0;
+					break;
+				case AutoTuneDownloadMode::Asynchronous:
+					next = 1;
+					break;
+				case AutoTuneDownloadMode::NoReadbacks:
+					next = 2;
+					break;
+				default:
+					return std::nullopt;
+			}
+
+			// A rung that was tried and did not help is stepped over, not the end of the ladder: Asynchronous not
+			// paying says nothing about the modes that stop reading back altogether.
+			for (; next < std::size(kDownloadLadder); next++)
+			{
+				const double mode = static_cast<double>(kDownloadLadder[next]);
+				if (!IsRejected(lever, mode, s))
+					return mode;
+			}
 			return std::nullopt;
+		}
+
+		case AutoTuneLever::DisplayScale:
+		{
+			if (!s.hw_renderer || !s.display_scale_available || s.display_base_short_side <= 0)
+				return std::nullopt;
+
+			// The smallest hw scaler step whose surface still holds the render: the render's short side is 448
+			// lines times the multiplier, and the setting counts in whole multiples of 448. A render bigger than
+			// the largest step is left to the resolution lever: shrinking the surface under it would throw away
+			// detail the render has.
+			const int step = static_cast<int>(std::ceil(s.resolution - kValueEpsilon));
+			if (step < 1 || step > kAutoTuneMaxDisplayScale)
+				return std::nullopt;
+
+			// Only a step that makes the surface smaller is a step. "Screen" is the base size; a step in force
+			// holds the short side to its multiple of 448, unless the screen is smaller than that.
+			const double base = s.display_base_short_side;
+			const double now = s.display_scale > 0 ? std::min(base, kAutoTuneBaseHeight * s.display_scale) : base;
+			if (kAutoTuneBaseHeight * step >= now - kValueEpsilon)
+				return std::nullopt;
+			return static_cast<double>(step);
+		}
 
 		case AutoTuneLever::Blending:
 		{
 			if (!s.hw_renderer)
 				return std::nullopt;
 			int floor = std::max(0, s.blending_floor);
-			// Basic to Minimum is a speed lever only where the GS thread on the CPU is the limit: on a GPU-bound
-			// game it measured +3.8% and -12% (SD865), and it is no help to a stall. Above Basic the steps are
-			// offered to every bottleneck.
+			// Basic to Minimum is a speed lever only where the GS thread on the CPU is the limit; it does not help
+			// a GPU-bound game or a stall. Above Basic the steps are offered to every bottleneck.
 			if (bottleneck != AutoTuneBottleneck::GsCpu)
 				floor = std::max(floor, kBlendingBasic);
 			if (s.blending_level > floor)
@@ -365,7 +421,6 @@ bool AutoTuneController::CheapLeversHaveSomethingToGive(double speed_pct, const 
 
 AutoTuneAction AutoTuneController::Diagnose(const AutoTuneLeverState& state)
 {
-	// Average the bad windows that triggered this.
 	AutoTuneWindow mean;
 	mean.has_gpu_timer = m_streak_windows.front().has_gpu_timer;
 	double speed = 0, late = 0, ee = 0, mtgs = 0, gsb = 0, vu = 0, iop = 0, gpu = 0, wgs = 0, wvu = 0, wiop = 0;
@@ -437,7 +492,6 @@ AutoTuneAction AutoTuneController::Diagnose(const AutoTuneLeverState& state)
 		return action;
 	}
 
-	// So far under full speed that one notch of resolution cannot close the gap: see the policy.
 	std::vector<double> streak_speeds;
 	for (const AutoTuneWindow& w : m_streak_windows)
 		streak_speeds.push_back(w.speed_pct);
@@ -561,10 +615,9 @@ uint32_t& AutoTuneController::RetriesFor(AutoTuneLever lever, double value)
 
 bool AutoTuneController::SceneChangedDuringTrial(double noise) const
 {
-	// The two halves of the measurement tell different stories. A trial's windows are one state of the game,
-	// the lever's; when the first half and the second half differ by more than the noise, something moved
-	// while they were taken. Two lumps of windows also make the spread-based noise estimate too small, which
-	// is how a loss inside the lumps looked certain. The governor ramps down and back by design.
+	// A trial's windows are one state of the game, the lever's. When the first and second half differ by more
+	// than the noise, something moved while they were taken. Two lumps of windows also make the spread-based
+	// noise estimate too small. The governor is exempt: it ramps down and back by design.
 	const size_t n = m_trial.speeds.size();
 	if (n >= m_policy.scene_halves_min_windows && n >= 4 && m_trial.lever != AutoTuneLever::EeGovernor)
 	{
@@ -591,6 +644,7 @@ bool AutoTuneController::SceneChangedDuringTrial(double noise) const
 			return moved(m_trial.gs_before, m_trial.gs_ms) || moved(m_trial.gpu_before, m_trial.gpu_ms);
 		case AutoTuneLever::Resolution:
 		case AutoTuneLever::Blending:
+		case AutoTuneLever::DisplayScale:
 			return moved(m_trial.ee_before, m_trial.ee_ms);
 		case AutoTuneLever::GsBackThread:
 		case AutoTuneLever::DownloadMode:
@@ -622,16 +676,14 @@ AutoTuneAction AutoTuneController::FinishTrial()
 	                   (!was_good_speed || was_late);
 
 	// Keep: the speed clearly rose, or reached full speed. Only the speed earns a keep. A cost falls whenever
-	// work is split over more threads, whether or not the game is faster (the GS back thread on God of War II:
-	// -14% GS cost, speed 39.7% -> 39.5%, the EE still the limit), so a lower cost on its own is not a reason to
-	// give up a core or a setting.
+	// work is split over more threads, whether or not the game is faster, so a lower cost on its own is not a
+	// reason to give up a core or a setting.
 	const bool keep = fixed || speed.clear;
 	// Reject, and remember it: the speed clearly fell, or it shows no gain even allowing for the noise and the
 	// cost shows none either. Anything else is looked at for longer, and then inconclusive.
 	//
-	// The speed clearly fell, whatever the cost did: the lever made things worse, and that is as good a
-	// measurement as there is. It ends the trial at the first look instead of keeping the player at the lower
-	// speed for another eight windows.
+	// A speed that clearly fell is rejected at the first look, whatever the cost did, so the player is not kept at
+	// the lower speed while more windows are taken.
 	const bool hurt = speed.worse;
 	// A cost that clearly fell is the one thing that holds a flat speed back from a rejection at the first look:
 	// the speed may follow it. If it does not, the longer look ends in a rejection (below).

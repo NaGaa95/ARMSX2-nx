@@ -635,6 +635,12 @@
     <ClCompile Include="IopThread\IopChannels.cpp">
       <Filter>System\Ps2\Iop</Filter>
     </ClCompile>
+    <ClCompile Include="IopThread\IopLagControl.cpp">
+      <Filter>System\Ps2\Iop</Filter>
+    </ClCompile>
+    <ClCompile Include="IopThread\IopLagRules.cpp">
+      <Filter>System\Ps2\Iop</Filter>
+    </ClCompile>
     <ClCompile Include="IopThread\IopPlacement.cpp">
       <Filter>System\Ps2\Iop</Filter>
     </ClCompile>
@@ -1040,6 +1046,12 @@
     <ClCompile Include="GS\GSCacheFile.cpp">
       <Filter>System\Ps2\GS</Filter>
     </ClCompile>
+    <ClCompile Include="GS\GSBlockId.cpp">
+      <Filter>System\Ps2\GS</Filter>
+    </ClCompile>
+    <ClCompile Include="GS\GSCompileQueue.cpp">
+      <Filter>System\Ps2\GS</Filter>
+    </ClCompile>
     <ClCompile Include="GS\GSClut.cpp">
       <Filter>System\Ps2\GS</Filter>
     </ClCompile>
@@ -1133,6 +1145,9 @@
     <ClCompile Include="GS\Renderers\HW\GSRendererHW.cpp">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClCompile>
+    <ClCompile Include="GS\Renderers\HW\GSRendererHWBurstMemo.cpp">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClCompile>
     <ClCompile Include="GS\Renderers\HW\GSRendererHWMultiISA.cpp">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClCompile>
@@ -1210,6 +1225,9 @@
     </ClCompile>
     <ClCompile Include="GS\Renderers\DX11\D3D.cpp">
       <Filter>System\Ps2\GS\Renderers\Direct3D11</Filter>
+    </ClCompile>
+    <ClCompile Include="GS\Renderers\Vulkan\GSRunsVK.cpp">
+      <Filter>System\Ps2\GS\Renderers\Vulkan</Filter>
     </ClCompile>
     <ClCompile Include="GS\Renderers\Vulkan\GSTextureVK.cpp">
       <Filter>System\Ps2\GS\Renderers\Vulkan</Filter>
@@ -1832,6 +1850,12 @@
     <ClInclude Include="IopThread\IopChannels.h">
       <Filter>System\Ps2\Iop</Filter>
     </ClInclude>
+    <ClInclude Include="IopThread\IopLagControl.h">
+      <Filter>System\Ps2\Iop</Filter>
+    </ClInclude>
+    <ClInclude Include="IopThread\IopLagRules.h">
+      <Filter>System\Ps2\Iop</Filter>
+    </ClInclude>
     <ClInclude Include="IopThread\IopPlacement.h">
       <Filter>System\Ps2\Iop</Filter>
     </ClInclude>
@@ -2189,6 +2213,9 @@
     <ClInclude Include="GS\GSCacheFile.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
+    <ClInclude Include="GS\GSBlockId.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
     <ClInclude Include="GS\GSClut.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
@@ -2199,6 +2226,9 @@
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\GSLocalMemory.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\GSCompileQueue.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\GSCompileStats.h">
@@ -2309,6 +2339,9 @@
     <ClInclude Include="GS\Renderers\SW\GSPerspectivePlane.h">
       <Filter>System\Ps2\GS\Renderers\Software</Filter>
     </ClInclude>
+    <ClInclude Include="GS\Renderers\SW\GSStqExtremes.h">
+      <Filter>System\Ps2\GS\Renderers\Software</Filter>
+    </ClInclude>
     <ClInclude Include="GS\Renderers\SW\GSScanlineEnvironment.h">
       <Filter>System\Ps2\GS\Renderers\Software</Filter>
     </ClInclude>
@@ -2322,6 +2355,12 @@
       <Filter>System\Ps2\GS\Renderers\Software</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\SW\GSSwTextureDirty.h">
+      <Filter>System\Ps2\GS\Renderers\Software</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\SW\GSSwTargetAlias.h">
+      <Filter>System\Ps2\GS\Renderers\Software</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\SW\GSSwTextureReaders.h">
       <Filter>System\Ps2\GS\Renderers\Software</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\SW\GSVertexSW.h">
@@ -2386,6 +2425,9 @@
     </ClInclude>
     <ClInclude Include="PerformanceMetrics.h">
       <Filter>System\Include</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\Vulkan\GSRunsVK.h">
+      <Filter>System\Ps2\GS\Renderers\Vulkan</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\Vulkan\GSTextureVK.h">
       <Filter>System\Ps2\GS\Renderers\Vulkan</Filter>
@@ -2766,6 +2808,9 @@
     <ClInclude Include="ImGui\FullscreenUI_Internal.h">
       <Filter>Misc\ImGui</Filter>
     </ClInclude>
+    <ClInclude Include="ImGui\FullscreenUI_PageDwell.h">
+      <Filter>Misc\ImGui</Filter>
+    </ClInclude>
     <ClInclude Include="ImGui\FullscreenUIShot.h">
       <Filter>Misc\ImGui</Filter>
     </ClInclude>
@@ -2918,6 +2963,9 @@
     <ClCompile Include="GS\Renderers\Common\GSPassScheduler.cpp">
       <Filter>System\Ps2\GS\Renderers\Common</Filter>
     </ClCompile>
+    <ClCompile Include="GS\Renderers\HW\GSBurstMemo.cpp">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClCompile>
     <ClCompile Include="GS\Renderers\HW\GSDrawLog.cpp">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClCompile>
@@ -2963,6 +3011,9 @@
     <ClInclude Include="GS\Renderers\Common\GSBlendConstantPolicy.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
+    <ClInclude Include="GS\Renderers\Common\GSRunsPolicy.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
     <ClInclude Include="GS\Renderers\Common\GSBackThreadPolicy.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
@@ -2972,10 +3023,16 @@
     <ClInclude Include="GS\Renderers\Common\GSAlphaBitLogicOp.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
+    <ClInclude Include="GS\Renderers\Common\GSRunSnapshot.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
     <ClInclude Include="GS\Renderers\Common\GSReplacementAlphaSnap.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\Common\GSFastStencilShadow.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\Common\GSStencilCounter.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\Common\GSFramebufferFetchPolicy.h">
@@ -3006,6 +3063,9 @@
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\Common\GSSnapshotPolicy.h">
+      <Filter>System\Ps2\GS</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\Common\GSTargetSizePolicy.h">
       <Filter>System\Ps2\GS</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\Common\GSStreamRingFlushRange.h">
@@ -3041,7 +3101,7 @@
     <ClInclude Include="GS\Renderers\HW\GSAlphaKnownBits.h">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClInclude>
-    <ClInclude Include="GS\Renderers\HW\GSExactDirtyMapping.h">
+    <ClInclude Include="GS\Renderers\HW\GSAlphaKnownRects.h">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\HW\GSTargetRebase.h">
@@ -3051,6 +3111,12 @@
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\HW\GSDrawAlphaMask.h">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\HW\GSBurstMemo.h">
+      <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
+    </ClInclude>
+    <ClInclude Include="GS\Renderers\HW\GSDepthFormatMove.h">
       <Filter>System\Ps2\GS\Renderers\Hardware</Filter>
     </ClInclude>
     <ClInclude Include="GS\Renderers\HW\GSDrawLog.h">

@@ -42,8 +42,6 @@ namespace
 	}
 } // namespace
 
-// ---- WriteFileAtomic --------------------------------------------------------------------
-
 TEST(CatalogFileUtil, WritesANewFileAndCreatesParentDirectories)
 {
 	ScopedTempDir dir;
@@ -88,8 +86,6 @@ TEST(CatalogFileUtil, FailureLeavesTheOriginalAndNoDebris)
 	EXPECT_TRUE(FileSystem::DirectoryExists(path.c_str()));
 }
 
-// ---- ResponseCache ----------------------------------------------------------------------
-
 TEST(CatalogResponseCache, StoreThenLoad)
 {
 	ScopedTempDir dir;
@@ -105,7 +101,6 @@ TEST(CatalogResponseCache, StoreThenLoad)
 	EXPECT_GE(entry->fetched_at, before - 1);
 	EXPECT_LE(entry->fetched_at, std::time(nullptr) + 1);
 
-	// The file is the JSON itself, where the spec says it lives.
 	EXPECT_EQ(FileSystem::ReadFileToString(cache.PathFor("textures-v2.json").c_str()).value_or(""), R"({"schemaVersion":2})");
 	EXPECT_TRUE(NoTempFilesLeft(cache.Directory()));
 }
@@ -140,6 +135,19 @@ TEST(CatalogResponseCache, AnEntryFromTheFutureIsNotFresh)
 	const std::time_t t0 = 1'700'000'000;
 	SetFileTime(cache.PathFor("c.json"), t0);
 	EXPECT_FALSE(cache.IsFresh("c.json", std::chrono::hours(24), t0 - 100));
+	EXPECT_FALSE(cache.IsFresh("c.json", std::chrono::hours(24), t0 - 2));
+}
+
+// The kernel can stamp a file from the fine clock while time() reads the coarse one, which lags
+// by under a tick. Across a second boundary a file written just now is stamped one second ahead.
+TEST(CatalogResponseCache, AnEntryOneSecondAheadIsFresh)
+{
+	ScopedTempDir dir;
+	const ResponseCache cache(dir.Dir());
+	ASSERT_TRUE(cache.Store("c.json", "{}"));
+	const std::time_t t0 = 1'700'000'000;
+	SetFileTime(cache.PathFor("c.json"), t0);
+	EXPECT_TRUE(cache.IsFresh("c.json", std::chrono::minutes(5), t0 - 1));
 }
 
 TEST(CatalogResponseCache, DefaultNowIsTheRealClock)
@@ -187,8 +195,6 @@ TEST(CatalogResponseCache, NamesMustBePlainFileNames)
 	}
 	EXPECT_FALSE(FileSystem::FileExists(dir.File("escape").c_str()));
 }
-
-// ---- JSON helpers -----------------------------------------------------------------------
 
 TEST(CatalogJson, ParsesAndReportsErrorsWithAnOffset)
 {

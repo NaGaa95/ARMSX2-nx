@@ -123,6 +123,50 @@ public class NativeApp {
 	/** PNG screenshot into the snapshots folder. No-op with no VM. */
 	public static native void saveScreenshot(String pngPath);
 
+	/**
+	 * GS dump with the output location chosen by the caller, for the problem report. Queues a dump
+	 * of the next [frames] frames whose bundle will be "[basePath].gs.zip" (anything after a
+	 * trailing .gs.zip/.gs/.png on [basePath] is dropped). The zip appears whole once the dump has
+	 * closed, so the caller polls for it. Needs a running VM that draws frames: a paused game never
+	 * opens the dump, so resume it and wait. Blocks until the GS thread has taken the request; not
+	 * for the UI thread. False if there is no VM or a snapshot is already pending.
+	 */
+	public static native boolean captureGsDumpTo(String basePath, int frames);
+
+	/**
+	 * Where the dump queued by captureGsDumpTo has got to, as {phase, vsyncsToOpen, vsyncsToRecorded}
+	 * (null if the array could not be allocated). Phase: 0 idle, 1 queued, 2 recording, 3 packing
+	 * (every frame is recorded, the zip is still being built), 4 done. The vsync counts are GS
+	 * vsyncs since the request, 0 until known. Cheap and safe from any thread.
+	 */
+	public static native long[] getGsDumpStatus();
+
+	/**
+	 * Writes a save state to [path] and nowhere else: it never touches the numbered slots, the
+	 * autosave or their backups. Refused (false) while the memory card is busy, with no game CRC
+	 * or with no VM. Blocks until the file is complete; not for the UI thread.
+	 */
+	public static native boolean saveStateToPath(String path);
+
+	/**
+	 * The GS driver report (the same JSON that sits beside a GS dump) written to [jsonPath]. Works
+	 * with no game running; the renderer sections are then empty. Blocks; not for the UI thread.
+	 */
+	public static native boolean writeSystemReport(String jsonPath);
+
+	/** What the last Vulkan load was asked for and what it got, as JSON. Works with no game. */
+	public static native String getCustomDriverStatus();
+
+	/** fps, speed, thread usage and frame times as JSON. {"valid":false} with no VM. */
+	public static native String getPerfSnapshot();
+
+	/**
+	 * Live clock state as JSON: per-core current/rated/policy kHz and governor, GPU current and
+	 * maximum clock with its governor, and the thermal zones. Works with no game running, and
+	 * unlike the perf snapshot the policy fields do not depend on load. File reads only.
+	 */
+	public static native String getPowerSnapshot();
+
 	// ADPF (PerformanceHintManager): hint the OS to clock the EE/GS threads' cores up toward
 	// the frame deadline instead of the DVFS governor under-clocking emulation. Applies live;
 	// no-op below API 33. Persisted app-side (pref "ui.adpf") and re-applied at startup.
@@ -153,6 +197,11 @@ public class NativeApp {
 	/** Diagnostic: write a line to the native emulog (Console) so it shows in the in-app
 	 *  Save Log export. Used by the Joy-Con input diagnostic; no-ops if the console isn't open. */
 	public static native void emulog(String msg);
+
+	/** True while the core has logs/emulog.txt open for writing. It opens the file when the app
+	 *  starts and again at the boot of each game after the first, and closes it when a game ends.
+	 *  A caller that wants to move the file must wait until this is false. */
+	public static native boolean isEmulogOpen();
 
 	/**
 	 * Live GS-only reconfigure for a running VM. Reloads the whole EmuCore/GS
@@ -244,6 +293,22 @@ public class NativeApp {
 	/** Pick a subtype for whatever device is in {@code port}; devices without subtypes ignore it. */
 	public static native void usbSetDeviceSubtype(int port, int subtype);
 
+	// ---- Microphone (Audio settings) -------------------------------------------
+
+	/** The phone's microphones as one {@code "<Android device id>\t<name>"} per line, where the name is
+	 *  what the settings store. Android lists input devices to Java only and re-ids a device on every
+	 *  plug-in, so this goes again before each game starts and whenever one comes or goes. */
+	public static native void setMicDevices(String list);
+
+	/** Start the microphone test: opens the capture a game gets (the Oboe source device) for {@code device}. */
+	public static native boolean micTestStart(String device);
+
+	/** How loud what arrived since the last call was, 0 to 1 over -60 to 0 dBFS; -1 with no test running. */
+	public static native float micTestLevel();
+
+	/** Stop the microphone test and release the capture. */
+	public static native void micTestStop();
+
 	/** Aim, as a fraction (0..1) of the screen area the game surface covers. Native scales it
 	 *  to the surface buffer, which can have fewer pixels than the screen. */
 	public static native void usbLightgunAim(float x, float y);
@@ -251,7 +316,6 @@ public class NativeApp {
 	/** Press/release one GUNCON_* binding on a port. */
 	public static native void usbLightgunButton(int port, int bind, boolean pressed);
 
-	// ---- Namco System 246/256 arcade games (.acgame) ----------------------------
 	/** Cabinet controls, from the core's JVS_MODE (pcsx2/DEV9/ACJV.h). */
 	public static final int ARCADE_MODE_GENERIC = 0;
 	public static final int ARCADE_MODE_LIGHTGUN = 1;
@@ -272,10 +336,20 @@ public class NativeApp {
 	/** Why the last runVMThread could not boot, or "" when it did. */
 	public static native String getLastBootError();
 
+	/** The core's VMBootResult for the last runVMThread that could not boot, BOOT_RESULT_SUCCESS when it did. */
+	public static native int getLastBootResult();
+
+	// VMBootResult values (pcsx2/VMManager.h); native-lib.cpp asserts they match.
+	public static final int BOOT_RESULT_SUCCESS = 0;
+	public static final int BOOT_RESULT_FAILURE = 1;
+	/** No BIOS is set up, or the one that was is gone, and the BIOS folder has no other. */
+	public static final int BOOT_RESULT_BIOS_NOT_FOUND = 3;
+	/** The BIOS file is there but could not be read, or is not a PS2 BIOS. */
+	public static final int BOOT_RESULT_BIOS_NOT_USABLE = 4;
+
 	/** The cabinet controls (ARCADE_MODE_*) the core gives a game ID such as NM00004. */
 	public static native int arcadeModeForGameId(String gameId);
 
-	/** Whether the running game is an arcade one. */
 	public static native boolean isArcadeSession();
 
 	/** A coin in player 1's (0) or player 2's (1) slot. */
@@ -287,7 +361,6 @@ public class NativeApp {
 	/** Flips the board's Test switch (the game's test menu). */
 	public static native void arcadeToggleTest();
 
-	/** Whether the Test switch is on. */
 	public static native boolean arcadeTestModeOn();
 
 	/** Whether a BIOS file is an arcade board's (COH-H). */
@@ -495,10 +568,9 @@ public class NativeApp {
 	 *  (applied on the CPU thread when the game is running). Returns null when the game has no
 	 *  file, else {hadRecord "1"/"0"} followed by kind, section, key, value for each key the record
 	 *  named. Kind "restored": put back, the value is what the file holds again (null: the key was
-	 *  deleted). Kind "absent": left alone because the key is not in the file, the value is what
-	 *  auto-tune wrote. Kind "changed": left alone because the file holds another value, the value
-	 *  is what auto-tune wrote. The app must do the same to its own copy of the game's settings
-	 *  (AutoTuneStore.applyReset). */
+	 *  deleted). Kind "absent" or "changed": left alone because the key is not in the file or the
+	 *  file holds another value, the value is what auto-tune wrote. The app must do the same to
+	 *  its own copy of the game's settings (AutoTuneStore.applyReset). */
 	public static native String[] autoTuneReset(String serial);
 
 	/** Called from native (the CPU thread) after auto-tune moved one setting into the game's
@@ -511,6 +583,21 @@ public class NativeApp {
 			com.armsx2.config.AutoTuneStore.INSTANCE.onCommitted(serial, section, key, value);
 		} catch (Throwable t) {
 			android.util.Log.e("ARMSX2", "onAutoTuneCommitted failed: " + section + "/" + key, t);
+		}
+	}
+	/** The output surface as auto-tune has to see it, pushed from EmulationSurface.applyOutputScale:
+	 *  [hwScaler] is the "Display Resolution (HW scaler)" in effect, an auto-tune trial included (0 = Screen,
+	 *  N = the short side is held to 448 * N), and [baseShortSide] the surface's short side in pixels before
+	 *  the setting shrinks it. */
+	public static native void setOutputScaleState(int hwScaler, int baseShortSide);
+	/** Called from native (the CPU thread) when auto-tune tries a display scale: [value] >= 0 is put in
+	 *  effect in place of the saved setting, -1 hands the surface back to it (AutoTuneStore.onDisplayScale).
+	 *  Nothing may escape: native makes no exception check beyond clearing one. */
+	public static void onAutoTuneDisplayScale(int value) {
+		try {
+			com.armsx2.config.AutoTuneStore.INSTANCE.onDisplayScale(value);
+		} catch (Throwable t) {
+			android.util.Log.e("ARMSX2", "onAutoTuneDisplayScale failed: " + value, t);
 		}
 	}
 	/** What the game database sets for a serial: one line per setting a per-game key can claim,
@@ -989,6 +1076,11 @@ public class NativeApp {
 	/** Top-align the render in a LANDSCAPE window (foldables / clamshell controllers). */
 	public static native void setLandscapeRenderTop(boolean top);
 
+	/** Side-by-side VR for phone headsets: the game drawn once in each half of the screen.
+	 *  [sizePercent] 30..100 of each half, [distancePercent] and [heightPercent] -100..100 of the
+	 *  room left around the pictures. Applies live. */
+	public static native void setSideBySideVR(boolean enabled, int sizePercent, int distancePercent, int heightPercent);
+
 	/** Pixels to keep clear at the top of a PORTRAIT render for a punch-hole/notch camera. Taken
 	 *  from the window's display cutout; 0 on devices without one. Only affects portrait
 	 *  top-aligned output. */
@@ -1016,13 +1108,28 @@ public class NativeApp {
 	 *  instead of OpenGL. The decision needs the driver-bug database (keyed on a parsed driver
 	 *  revision), which lives natively, so the app supplies the strings rather than the verdict. */
 	public static native void setAutoRendererGpuStrings(String vendor, String renderer, String version);
+	/** The first instruction set extension this build was compiled for that the CPU lacks
+	 *  ("the dot product instructions", ...), or null if it has them all. Callable before the core
+	 *  is initialized; the app must not start the core when it is non-null. */
+	public static native String missingCpuFeature();
 	/** Whether the driver list offers malisx2 for this device's GPU (CustomDriver.offersMaliSX2).
 	 *  Pushed once at startup. The core pairs it with the driver the open Vulkan device is on and
 	 *  posts the "get malisx2" OSD notice at game start when that driver is not malisx2. */
 	public static native void setMaliSX2Offered(boolean offered);
+	/** How the app names the installed malisx2 pack (CustomDriver.maliSX2Label), or "" when none is
+	 *  installed. Pushed with the per-game driver pick before each boot. The core's malisx2 notice
+	 *  says "installed but not selected" instead of "get it" when this is not empty. */
+	public static native void setMaliSX2InstalledPack(String name);
 	/** Affinity Control Mode: 0 off (scheduler decides), 1-6 EE/VU/GS priority orders,
 	 *  7 Performance Cores. Read when the VM boots — set it before runVMThread. */
 	public static native void setAffinityMode(int mode);
+
+	/**
+	 * Whether the IOP thread setting should start on for this device (IopThread::DefaultOnForHost in the core): the
+	 * performance tier is two or three cores and the core would run the thread. mtvu is the MTVU setting, which counts
+	 * one more thread. Callable before the VM exists.
+	 */
+	public static native boolean iopThreadDefaultOn(boolean mtvu);
 	public static native void renderPreloading(int value);
 
 	/** Flip texture dumping on/off live (PCSX2's ToggleTextureDumping hotkey).
@@ -1055,7 +1162,7 @@ public class NativeApp {
 	// ---- Remote play (com.armsx2.remoteplay; core side in cpp/remote_play.cpp) ----
 	// The running game's frames and sound for the stream to a friend's device, pulled by the app's
 	// streaming threads (RemotePlayFrames, RemotePlayHost) so nothing calls into Java from the GS or
-	// SPU2 threads. Same calls and meanings as ARMSX3's, which the streaming code was written against.
+	// SPU2 threads. Same calls and meanings as ARMSX3's.
 	public static native boolean remotePlayStart(int maxWidth, int maxHeight);
 	public static native void remotePlayStop();
 	public static native int remotePlayPollVideo(java.nio.ByteBuffer buffer, int[] info, int timeoutMs);
@@ -1065,7 +1172,6 @@ public class NativeApp {
 	public static native void remotePlayDestroyImage(long image);
 	public static native void remotePlayReleaseFrame(int slot, int seq);
 	public static native void remotePlaySetHardware(boolean enabled);
-	/** Whether the game is paused, for the viewer's "your friend paused the game". */
 	public static native boolean remotePlayPaused();
 	// The host's router, asked to let the friend in for the session (UPnP): this device's address on
 	// the router's network or null, then the router's public "address:port" for a local UDP port or null.
@@ -1105,6 +1211,8 @@ public class NativeApp {
 	 * Returns null if the file isn't a valid BIOS image.
 	 */
 	public static native BiosInfo getBiosInfoFromFd(int fd);
+	/** Whether the file is a PS1 BIOS. Takes ownership of fd, like getBiosInfoFromFd. */
+	public static native boolean isPs1BiosFromFd(int fd);
 
 	/**
 	 * Read enough of a PS2 disc image to extract its serial (e.g.
@@ -1143,6 +1251,9 @@ public class NativeApp {
 	 *  the card. The counter only ticks down while the VM runs, so it does NOT clear while paused. */
 	public static native boolean isMemcardBusy();
 	public static native boolean loadStateFromSlot(int slot);
+	/** Why the core refused the last state load (loadStateFromSlot, loadStateFromFile, loadAutosaveState,
+	 *  loadAutosaveStateAt), in the core's English; empty when the core did not refuse it. */
+	public static native String getLastStateLoadError();
 	/** 1 = loaded, 0 = transient refusal (retry), -1 = permanent failure. */
 	public static native int loadStateFromFile(String path);
 	public static native String getGamePathSlot(int slot);
@@ -1161,9 +1272,9 @@ public class NativeApp {
 	// in the savestate folder (see VMManager::SAVESTATE_SLOT_AUTOSAVE) so the
 	// numbered slots 0-9 stay user-controlled. saveAutosaveState is called
 	// from the in-game "Save State And Exit" menu; hasAutosaveState gates
-	// the load picker's autosave tile. That file is the newest autosave: saving moves the ones
-	// before it a place older, keeping `keep` (1-5) in all; the *At(n) calls reach the n-th newest
-	// (1 = the newest, 2 the one before it...) for the picker's tiles, null / false when there is none.
+	// the load picker's autosave tile. That file is the newest autosave: saving shifts the older
+	// ones back a place, keeping `keep` (1-5) in all. The *At(n) calls reach the n-th newest
+	// (1 = the newest) for the picker's tiles, null / false when there is none.
 	public static native boolean saveAutosaveState(int keep);
 	public static native boolean loadAutosaveState();
 	public static native boolean hasAutosaveState();

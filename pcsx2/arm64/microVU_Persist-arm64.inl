@@ -29,10 +29,6 @@
 
 namespace mVUPersist
 {
-	// A fixup is an encoding form (how the operand sits in the code) and a
-	// target (what it points at). Every target is resolved against this
-	// process at hydration, so nothing in a payload depends on the addresses
-	// of the process that recorded it.
 	enum : u8
 	{
 		kFormMovRun = 0, // MOVZ + MOVK×(width-1) over halfwords 0..width-1, one Rd
@@ -85,7 +81,6 @@ namespace mVUPersist
 	};
 	static_assert(sizeof(PersistFixup) == 24);
 
-	// Instructions a fixup's patcher rewrites, starting at codeOffset.
 	static u32 FixupSpanInsns(const PersistFixup& f)
 	{
 		return (f.form == kFormMovRun) ? f.width : 1;
@@ -104,6 +99,7 @@ namespace mVUPersist
 		u32 entryOffset; // within chunk
 		u32 startPC; // microMem byte offset
 		u32 hasJumpCache;
+		u32 extent; // microBlock::extent
 		microRegInfo pState;
 		microRegInfo pStateEnd;
 		microBlock* live; // manager's copy; not serialized
@@ -410,7 +406,6 @@ namespace mVUPersist
 		hi = id.high64;
 	}
 
-	// The build's identity folded to the 64 bits a payload header carries.
 	static u64 BuildTag()
 	{
 		u64 lo, hi;
@@ -462,11 +457,7 @@ namespace mVUPersist
 	// Address-operand audit (test tooling)
 	//------------------------------------------------------------------
 	//
-	// Decodes a recorded chunk as it sits in the slab and reports every
-	// instruction that carries a host address no fixup covers: a PC-relative
-	// operand (B/BL, B.cond, CBZ/CBNZ, TBZ/TBNZ, ADR/ADRP, LDR literal) whose
-	// target is outside the chunk, or a MOVZ/MOVN/ORR-immediate + MOVK run
-	// whose value lands in a mapped region. This is independent of the emit
+	// Decodes recorded chunks straight from the slab, independent of the emit
 	// helpers, so it also catches code that bypasses them. Counts go into a
 	// census keyed by "<form>-><region>".
 
@@ -567,8 +558,13 @@ namespace mVUPersist
 		out.chunks++;
 		out.insns += n;
 
-		auto note = [&](u32 idx, const char* form, uptr value) {
+		// `wide`: a 64-bit immediate that is in no region still counts when it is too large to be a
+		// count, mask or offset. That is the distance between two regions (or an address the audit
+		// cannot place), which another process's layout makes wrong and no fixup can repair.
+		auto note = [&](u32 idx, const char* form, uptr value, bool wide = false) {
 			const char* region = AuditRegion(mVU, log, value);
+			if (!region && wide && !covered[idx])
+				region = "no-region";
 			if (!region)
 				return;
 			const std::string key = std::string(form) + "->" + region;
@@ -667,7 +663,10 @@ namespace mVUPersist
 					out.data32++;
 			}
 			else if (value >= 0x10000)
-				note(i, "movseq", static_cast<uptr>(value));
+			{
+				const s64 sv = static_cast<s64>(value);
+				note(i, "movseq", static_cast<uptr>(value), sv >= (s64{1} << 32) || sv < -(s64{1} << 31));
+			}
 			i = j - 1;
 		}
 	}
@@ -1013,6 +1012,7 @@ namespace mVUPersist
 				rec.entryOffset = eb.entryOffset;
 				rec.startPC = eb.startPC;
 				rec.hasJumpCache = (eb.live->jumpCache != nullptr) ? 1 : 0;
+				rec.extent = eb.live->extent;
 				std::memcpy(&rec.pState, &eb.live->pState, sizeof(microRegInfo));
 				std::memcpy(&rec.pStateEnd, &eb.live->pStateEnd, sizeof(microRegInfo));
 				rec.live = eb.live;
@@ -1068,8 +1068,7 @@ namespace mVUPersist
 
 	void SyncRecordingFromConfig(bool config_enabled)
 	{
-		// Production: recording follows the program cache setting (EnableVUProgramCache
-		// or EnableVUAot: UseVUProgramCache), called from
+		// Production: recording follows the program cache setting, called from
 		// mVUinit/mVUreset before the options sentinel is rebuilt. The
 		// test-manual override lets the recompiler-test harness drive
 		// recording itself without these reset-time syncs clobbering it.
@@ -1139,7 +1138,9 @@ namespace mVUPersist
 	//    image fixup is an offset into the emulator module, which any other
 	//    build lays out differently, so a payload is only good for the build
 	//    that made it.
-	static constexpr u32 kImageVersion = 3;
+	// 4: a block's jump-cache flag shares its word with the block's extent
+	//    (DiskBlock::jumpCacheAndExtent).
+	static constexpr u32 kImageVersion = 4;
 
 	struct ImageHeader
 	{
@@ -1178,10 +1179,15 @@ namespace mVUPersist
 		u32 chunkIndex;
 		u32 entryOffset;
 		u32 startPC;
-		u32 hasJumpCache;
+		// Bit 31: the block has a jump cache. Bits 0-30: microBlock::extent, which
+		// only the crash post-mortem reads; one that does not fit the block's chunk
+		// is dropped (0), not a reason to reject the image.
+		u32 jumpCacheAndExtent;
 		u8 pState[sizeof(microRegInfo)];
 		u8 pStateEnd[sizeof(microRegInfo)];
 	};
+
+	static constexpr u32 kDiskJumpCacheBit = 0x80000000u;
 
 	struct DiskChunkHeader
 	{
@@ -1231,7 +1237,7 @@ namespace mVUPersist
 			db.chunkIndex = rec.chunkIndex;
 			db.entryOffset = rec.entryOffset;
 			db.startPC = rec.startPC;
-			db.hasJumpCache = rec.hasJumpCache;
+			db.jumpCacheAndExtent = (rec.hasJumpCache ? kDiskJumpCacheBit : 0) | (rec.extent & mVUBlockExtent::kMask);
 			std::memcpy(db.pState, &rec.pState, sizeof(microRegInfo));
 			std::memcpy(db.pStateEnd, &rec.pStateEnd, sizeof(microRegInfo));
 			AppendPod(out, db);
@@ -1252,6 +1258,32 @@ namespace mVUPersist
 		std::memcpy(out.data() + offsetof(ImageHeader, payloadHash),
 			&payload_hash, sizeof(payload_hash));
 		return true;
+	}
+
+	static u64 ShapeOf(u32 ranges, u32 blocks, u32 chunks)
+	{
+		const u32 words[3] = {ranges, blocks, chunks};
+		return XXH3_64bits(words, sizeof(words)) | 1u; // (never 0, which means "none")
+	}
+
+	u64 LogShape(const microProgram& prog)
+	{
+		const MvuPersistLog* log = prog.persist;
+		if (!log || log->blocks.empty() || !prog.contentHashValid)
+			return 0;
+		return ShapeOf(prog.ranges ? static_cast<u32>(prog.ranges->size()) : 0, static_cast<u32>(log->blocks.size()),
+			static_cast<u32>(log->chunks.size()));
+	}
+
+	u64 ImageShape(const u8* data, size_t size)
+	{
+		if (!data || size < sizeof(ImageHeader))
+			return 0;
+		ImageHeader hdr;
+		std::memcpy(&hdr, data, sizeof(hdr));
+		if (hdr.magic != kImageMagic || hdr.version != kImageVersion)
+			return 0;
+		return ShapeOf(hdr.rangeCount, hdr.blockCount, hdr.chunkCount);
 	}
 
 	// Checksum of a serialized image as SerializeProgram computed it.
@@ -1414,7 +1446,6 @@ namespace mVUPersist
 			return nullptr;
 		}
 
-		// Without the region bases no image or data address can be resolved.
 		if (!GetRegions().valid)
 		{
 			s_stats[vu].hydrationRejects++;
@@ -1618,12 +1649,15 @@ namespace mVUPersist
 			tmp.x86ptrStart = chunk_base[b.chunkIndex] + b.entryOffset;
 			tmp.hostEntry = tmp.x86ptrStart;
 			tmp.jumpCache = nullptr;
+			tmp.extent = b.jumpCacheAndExtent & mVUBlockExtent::kMask;
+			if (static_cast<u64>(b.entryOffset) + mVUBlockExtent::HostBytes(tmp.extent) > chunks[b.chunkIndex].codeSize)
+				tmp.extent = 0;
 
 			microBlock* installed = prog->block[slot]->add(mVU, &tmp);
 			// mVUcompileJIT dereferences jumpCache unguarded (it was allocated
 			// at compile time by normJumpCompile) — restore it eagerly.
-			if (b.hasJumpCache && !installed->jumpCache)
-				installed->jumpCache = new microJumpCache[mProgSize / 2];
+			if ((b.jumpCacheAndExtent & kDiskJumpCacheBit) && !installed->jumpCache)
+				installed->jumpCache = static_cast<microJumpCache*>(mVUJumpTable::Alloc());
 			final_block[i] = installed;
 		}
 
@@ -1687,7 +1721,8 @@ namespace mVUPersist
 			rec.chunkIndex = blocks[i].chunkIndex;
 			rec.entryOffset = blocks[i].entryOffset;
 			rec.startPC = blocks[i].startPC;
-			rec.hasJumpCache = blocks[i].hasJumpCache;
+			rec.hasJumpCache = (blocks[i].jumpCacheAndExtent & kDiskJumpCacheBit) ? 1 : 0;
+			rec.extent = final_block[i]->extent;
 			std::memcpy(&rec.pState, blocks[i].pState, sizeof(microRegInfo));
 			std::memcpy(&rec.pStateEnd, blocks[i].pStateEnd, sizeof(microRegInfo));
 			rec.live = final_block[i];
@@ -1929,7 +1964,10 @@ namespace mVUPersist
 			AppendPod(canon, b.chunkIndex);
 			AppendPod(canon, b.entryOffset);
 			AppendPod(canon, b.startPC);
-			AppendPod(canon, b.hasJumpCache);
+			// The flag alone, as before the extent shared its word: the extent
+			// follows from the code, and the digest pins the code.
+			const u32 hasJumpCache = (b.jumpCacheAndExtent & kDiskJumpCacheBit) ? 1 : 0;
+			AppendPod(canon, hasJumpCache);
 		}
 		for (u32 i = 0; i < hdr.chunkCount; i++)
 		{

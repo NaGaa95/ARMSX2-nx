@@ -2,10 +2,10 @@
 
 import unittest
 
-from ios_source import SWIFT, block, read, without_comments
+from ios_source import block, read, swift, without_comments
 
 
-GAME_SCREEN = SWIFT / "Views/GameScreenView.swift"
+PANEL = swift("RetroAchievementsGamePanel.swift")
 
 
 class RetroAchievementsController(unittest.TestCase):
@@ -13,11 +13,11 @@ class RetroAchievementsController(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.panel = block(without_comments(read(GAME_SCREEN)), "private struct RetroAchievementsGamePanel")
+        cls.panel = block(without_comments(read(PANEL)), "struct RetroAchievementsGamePanel")
 
     def test_it_has_a_session_that_circle_closes(self):
         self.assertIn('scopeKey: "runtime.retro-achievements"', self.panel)
-        self.assertIn("onBack: {\n                dismiss()", self.panel)
+        self.assertIn("onBack: {\n                close()", self.panel)
 
     def test_each_achievement_is_a_target(self):
         self.assertIn('id: "runtime.retro-achievements.\\(entry.id)"', self.panel)

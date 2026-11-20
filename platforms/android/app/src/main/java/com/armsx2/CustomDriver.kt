@@ -53,51 +53,110 @@ object CustomDriver {
         val releasesUrl: String,
         val idPrefix: String,
         /** Whether to list this source for the device's GL_RENDERER (null when unknown).
-         *  Sources that only build for one GPU family say so here; the rest list everywhere. */
-        val supports: (renderer: String?) -> Boolean = { true },
+         *  A pack only ever loads on the GPU vendor it was built for, so every source names its
+         *  family here — there is no default — and the list never offers an Adreno pack to a Mali
+         *  device or the reverse. An unreadable renderer matches no source: the family is unknown,
+         *  so nothing is offered, and a local import stays available. */
+        val supports: (renderer: String?) -> Boolean,
     )
 
-    /** Mali Valhall architectures v9 and v11, the GPUs our MaliSX2 packs drive and the set Auto
-     *  sends to Vulkan: G57, G68, G77, G78 (G78AE included) and G615, G715 (Immortalis-G715
-     *  included). Not v10 (G310/G510/G610/G710), Bifrost or the 5th-gen parts. Same list as
-     *  GpuProfileDetector::MaliValhallArch returning 9 or 11. GL_RENDERER reads like "Mali-G57 MC2"
-     *  or "Mali-G715-Immortalis MC11". No \b after the number so "G78AE" matches; (?!\d) keeps a
-     *  longer model number from matching on its prefix. */
-    private val MALI_VALHALL_V9_V11 = Regex("""\bG(?:57|68|77|78|615|715)(?!\d)""", RegexOption.IGNORE_CASE)
-    internal fun isMaliValhallV9OrV11(renderer: String?): Boolean =
+    /** The GPUs our MaliSX2 packs drive: every Mali of arch 7 (Bifrost G31, G51, G52, G76), arch 9
+     *  (Valhall G57, G68, G77, G78 — G78AE included), arch 10 (G310, G510, G610, G710) and arch 11
+     *  (G615, G715 — Immortalis-G715 included), as malisx2 0.5.0 accepts them. Not the arch 6
+     *  Bifrost parts (G71, G72), not Midgard (T-series), not the 5th-gen parts (G620, G720, G625,
+     *  G725, G1). GL_RENDERER reads like "Mali-G57 MC2" or "Mali-G715-Immortalis MC11". No \b after
+     *  the number so "G78AE" matches; (?!\d) keeps a longer model number from matching on its prefix
+     *  (G31 against G310, G51 against G510). Releases before 0.5.0 drive fewer of these: 0.3.1 to
+     *  0.4.1 the G52, G76, arch 9 and arch 11 only. */
+    private val MALISX2_SUPPORTED_MALI =
+        Regex("""\bG(?:31|51|52|57|68|76|77|78|310|510|610|615|710|715)(?!\d)""", RegexOption.IGNORE_CASE)
+    internal fun isMaliSX2Supported(renderer: String?): Boolean =
         renderer != null &&
             (renderer.contains("Mali", ignoreCase = true) || renderer.contains("Immortalis", ignoreCase = true)) &&
-            MALI_VALHALL_V9_V11.containsMatchIn(renderer)
+            MALISX2_SUPPORTED_MALI.containsMatchIn(renderer)
 
     // Our own Vulkan driver for Mali, replacing Arm's on the kbase kernel driver. One
     // adrenotools pack per release (meta.json + libvulkan_malisx2.so), loaded the
     // same way as the Turnip packs. Listed only on the GPUs it supports.
-    // The id prefix is still "armsx2libmali", from before the driver was renamed: it is
-    // part of the install directory name and of the saved customDriverId of every pack
-    // already installed, so it must not change.
+    // The id prefix stays "armsx2libmali" (the driver's old name): it is part of the install
+    // directory name and of the saved customDriverId of every pack already installed.
     private val MALISX2_SOURCE = DriverSource(
         "ARMSX2 · MaliSX2",
         "https://api.github.com/repos/bmdhacks/malisx2/releases",
         "armsx2libmali",
-        supports = ::isMaliValhallV9OrV11,
+        supports = ::isMaliSX2Supported,
     )
 
     /** Whether the driver list offers malisx2 for [renderer] (GL_RENDERER). The wrong-driver
-     *  notice keys on this (pushed to native by NativeApp.setMaliSX2Offered), so it follows the
-     *  list: a GPU gets the notice exactly when it is offered the download, and widening
-     *  [MALISX2_SOURCE]'s `supports` widens both. */
+     *  notice (pushed to native by NativeApp.setMaliSX2Offered) keys on this, so a GPU gets the
+     *  notice exactly when it is offered the download. */
     fun offersMaliSX2(renderer: String?): Boolean = MALISX2_SOURCE.supports(renderer)
+
+    /** Whether an installed pack is a malisx2 pack, from the directory it was installed in (its id)
+     *  and the library it loads. Same rule as GSDriverReport::IsMaliSX2Pack in the core, which
+     *  decides the same thing for the pack the Vulkan library was loaded with: "malisx2", or the
+     *  driver's old name "libmali" that the ids of already-installed packs still carry. */
+    internal fun isMaliSX2Pack(id: String, libraryName: String): Boolean =
+        listOf(id, libraryName).any {
+            it.contains("malisx2", ignoreCase = true) || it.contains("libmali", ignoreCase = true)
+        }
+
+    private fun versionOf(d: InstalledDriver): List<Int> =
+        Regex("""\d+""").findAll(d.name).map { it.value.toIntOrNull() ?: 0 }.toList()
+
+    private val VERSION_ORDER = Comparator<InstalledDriver> { a, b ->
+        val va = versionOf(a)
+        val vb = versionOf(b)
+        var c = 0
+        for (i in 0 until maxOf(va.size, vb.size)) {
+            c = (va.getOrElse(i) { 0 }).compareTo(vb.getOrElse(i) { 0 })
+            if (c != 0) break
+        }
+        c
+    }
+
+    /** The newest installed malisx2 pack (by the version in its name), or null when there is none. */
+    internal fun installedMaliSX2(installed: List<InstalledDriver>): InstalledDriver? =
+        installed.filter { isMaliSX2Pack(it.id, it.libraryName) }.maxWithOrNull(VERSION_ORDER)
+
+    /** What the notices call a malisx2 pack: its name without the build tag in parentheses, so
+     *  "malisx2 0.4.1 (g1a2b3c)" reads "malisx2 0.4.1". Never empty. */
+    internal fun maliSX2Label(d: InstalledDriver): String =
+        d.name.replace(Regex("""\s*\([^)]*\)\s*$"""), "").ifBlank { d.name }.ifBlank { d.id }
+
+    /** The malisx2 pack the driver list should offer a switch to: the GPU is one the list offers
+     *  malisx2 for, a malisx2 pack is installed, and the driver this scope runs with
+     *  ([effectiveId], the id from [CustomDriver.effectiveId], null for the system driver) is not
+     *  a malisx2 pack. Null when there is nothing to offer. */
+    internal fun maliSX2SwitchOffer(
+        renderer: String?, installed: List<InstalledDriver>, effectiveId: String?,
+    ): InstalledDriver? {
+        if (!offersMaliSX2(renderer)) return null
+        val pack = installedMaliSX2(installed) ?: return null
+        val running = installed.firstOrNull { it.id == effectiveId }
+        return if (running != null && isMaliSX2Pack(running.id, running.libraryName)) null else pack
+    }
+
+    /** Tells the core which malisx2 pack is installed (or none), for the "installed but not selected"
+     *  OSD notice at game start. Called with the per-game driver pick before each boot, since packs
+     *  come and go while the app runs. */
+    fun pushInstalledMaliSX2(installed: List<InstalledDriver>) {
+        val label = installedMaliSX2(installed)?.let(::maliSX2Label).orEmpty()
+        runCatching { NativeApp.setMaliSX2InstalledPack(label) }
+    }
 
     // Our own Turnip: Mesa with the ARMSX2 driver patches, built as adrenotools packs.
     // The emulator recognises these builds by the `(git-axfl<N>-…)` token in
     // driverInfo and takes the barrier-less in-pass read road on Adreno 650 and up
-    // (6xx only) under one of them (GSGPUDriverProfile.cpp). Same GitHub-releases zip format as
-    // every source below; one release per pack, so the release name is the row title.
-    // Listed on every GPU; the first-run setup offers it on Adreno 6xx and 7xx only ([setupSource]).
+    // (6xx only) under one of them (GSGPUDriverProfile.cpp). One release per pack, so the
+    // release name is the row title.
+    // Listed on Adreno only: it is a Qualcomm driver and loads on nothing else. The first-run
+    // setup offers it on Adreno 6xx and 7xx only ([setupSource]).
     private val ARMSX2_TURNIP_SOURCE = DriverSource(
         "ARMSX2 · turnip",
         "https://api.github.com/repos/bmdhacks/armsx2-turnip/releases",
         "armsx2turnip",
+        supports = ::isAdreno,
     )
 
     /** Qualcomm's "A" marketing names, which some GL drivers report in GL_RENDERER instead of the
@@ -125,6 +184,17 @@ object CustomDriver {
         val r = withAdrenoModelNumber(renderer) ?: return false
         return ADRENO_6XX_7XX.containsMatchIn(r)
     }
+
+    /** Any Adreno, whatever its model: the Turnip and Adreno Tools packs drive Qualcomm's driver,
+     *  and none of them loads on another vendor's GPU. Read after [withAdrenoModelNumber] so a
+     *  marketing name ("Adreno (TM) A12") still counts as one. */
+    internal fun isAdreno(renderer: String?): Boolean =
+        withAdrenoModelNumber(renderer)?.contains("Adreno", ignoreCase = true) == true
+
+    /** Samsung's Xclipse (AMD RDNA based), which takes neither Arm's driver nor Turnip and has its
+     *  own pack sources in [DRIVER_SOURCES] (ExynosTools and MdiEx). */
+    internal fun isXclipse(renderer: String?): Boolean =
+        renderer?.contains("Xclipse", ignoreCase = true) == true
 
     /** The source the first-run setup offers for [renderer]: ours for the GPU, or null when none of
      *  our drivers is built for it (the system driver stays). The two predicates never overlap. */
@@ -155,11 +225,13 @@ object CustomDriver {
             "AdrenoToolsDrivers",
             "https://api.github.com/repos/K11MCH1/AdrenoToolsDrivers/releases",
             "",
+            supports = ::isAdreno,
         ),
         DriverSource(
             "MrPurple · purple-turnip",
             "https://api.github.com/repos/MrPurple666/purple-turnip/releases",
             "purpleturnip",
+            supports = ::isAdreno,
         ),
         // Scheduled biweekly freedreno/Turnip adrenotools builds (incl. Gen8 + a7xx
         // Qualcomm driver packages). Same GitHub-releases meta.json format as above.
@@ -167,6 +239,7 @@ object CustomDriver {
             "StevenMXZ · Adreno-Tools",
             "https://api.github.com/repos/StevenMXZ/Adreno-Tools-Drivers/releases",
             "stevenmxz",
+            supports = ::isAdreno,
         ),
         // crueter's GameHub Turnip packs, tuned for Snapdragon 8 Elite / Adreno 8xx
         // (Gen 8). Same GitHub-releases adrenotools zip format as the sources above.
@@ -174,6 +247,7 @@ object CustomDriver {
             "crueter · GameHub 8Elite",
             "https://api.github.com/repos/crueter/GameHub-8Elite-Drivers/releases",
             "gamehub8e",
+            supports = ::isAdreno,
         ),
         // PojavLauncherTeam/freedreno-builder — biweekly Mesa Turnip builds (archived at
         // Mesa ~Jan 2025). Each release ships a bare libvulkan_freedreno.so (no meta.json,
@@ -183,13 +257,25 @@ object CustomDriver {
             "PojavLauncherTeam · freedreno (A10)",
             "https://api.github.com/repos/PojavLauncherTeam/freedreno-builder/releases",
             "freedrenobuilder",
+            supports = ::isAdreno,
         ),
         // WearyConcern1165/ExynosTools — driver packs for Samsung Xclipse (Exynos) GPUs.
-        // Same GitHub-releases adrenotools .zip format as the sources above.
+        // Same GitHub-releases adrenotools .zip format as the sources above. Xclipse only,
+        // like MdiEx below: these packs drive that GPU and nothing else.
         DriverSource(
             "WearyConcern1165 · ExynosTools",
             "https://api.github.com/repos/WearyConcern1165/ExynosTools/releases",
             "exynostools",
+            supports = ::isXclipse,
+        ),
+        // avavo/MdiEx — the packs ExynosTools republishes, released here first and newer: one zip
+        // per Exynos chip (2200, 2400, 2600, ...) plus a chip-neutral "Nativo" base. Same meta.json
+        // zip format. Xclipse only, so it is listed only where GL_RENDERER names an Xclipse part.
+        DriverSource(
+            "avavo · MdiEx",
+            "https://api.github.com/repos/avavo/MdiEx/releases",
+            "mdiex",
+            supports = ::isXclipse,
         ),
     )
 
@@ -197,6 +283,12 @@ object CustomDriver {
      *  doesn't include one. Every Turnip release we care about uses
      *  this name, but the field is technically optional in the schema. */
     private const val DEFAULT_LIBRARY_NAME = "libvulkan_freedreno.so"
+
+    /** Labels of the sources the download list offers for [renderer] (the system GL_RENDERER), in
+     *  display order. This is the whole GPU-family rule the list applies; [fetchRemote] filters on
+     *  the same [DriverSource.supports] predicates. */
+    internal fun sourceLabelsFor(renderer: String?): List<String> =
+        DRIVER_SOURCES.filter { it.supports(renderer) }.map { it.label }
 
     /** A driver extracted under `<externalFilesDir>/drivers/<id>/`. */
     data class InstalledDriver(
@@ -226,6 +318,9 @@ object CustomDriver {
         val assetUrl: String,
         val sizeBytes: Long,
         val source: String = "",
+        /** What a list shows for it: the release's name, or the zip's own name when the release
+         *  ships one zip per device (MdiEx: 1480, 2200, 2400, ...), so each row says which one it is. */
+        val title: String = releaseName,
     )
 
     // ---- Installed drivers --------------------------------------------------
@@ -285,7 +380,10 @@ object CustomDriver {
     // ---- GitHub release list ------------------------------------------------
 
     /** Fetch every source that supports [renderer] (the system GL_RENDERER)
-     *  and flatten into one RemoteDriver per .zip asset. Suspending — caller must wrap
+     *  and flatten into one RemoteDriver per .zip asset. The sources are filtered by GPU family
+     *  ([DriverSource.supports]), so a Mali device is never offered an Adreno pack or the reverse;
+     *  a GPU none of the sources builds for — including an unreadable GL_RENDERER — gets an empty
+     *  list. Suspending — caller must wrap
      *  in `withContext(Dispatchers.IO)` (the JNI call blocks the
      *  calling thread). Returns empty list on any network/parse error;
      *  callers can detect "I had drivers shown a moment ago, now
@@ -329,6 +427,9 @@ object CustomDriver {
             val releaseName = release.optString("name").ifEmpty { tag }
             val publishedAt = release.optString("published_at")
             val assets = release.optJSONArray("assets") ?: continue
+            val zips = (0 until assets.length()).count {
+                assets.optJSONObject(it)?.optString("name")?.endsWith(".zip", ignoreCase = true) == true
+            }
             for (j in 0 until assets.length()) {
                 val asset = assets.optJSONObject(j) ?: continue
                 val assetName = asset.optString("name")
@@ -349,11 +450,16 @@ object CustomDriver {
                     assetUrl = url,
                     sizeBytes = size,
                     source = src.label,
+                    title = if (zips > 1) zipTitle(assetName) else releaseName,
                 )
             }
         }
         return out
     }
+
+    /** "MdiEx_1480_v3.6.zip" -> "MdiEx 1480 v3.6". */
+    private fun zipTitle(assetName: String): String =
+        assetName.substring(0, assetName.length - ".zip".length).replace('_', ' ').trim().ifEmpty { assetName }
 
     /** Stable id from `<tag>-<assetBase>`. Strips ".zip" + non-filename
      *  chars so the driver dir name is dlopen-safe (paths get fed straight

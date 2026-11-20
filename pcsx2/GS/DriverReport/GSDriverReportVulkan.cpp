@@ -76,6 +76,7 @@ namespace GSDriverReport
 			VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 			VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME,
 			VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
+			VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME,
 			VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME,
 			VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME,
 			VK_ARM_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME,
@@ -380,7 +381,6 @@ namespace GSDriverReport
 		WriteStruct(w, props.sparseProperties);
 		w.EndObject();
 
-		// Properties2 chain.
 		VkPhysicalDeviceVulkan11Properties p11;
 		VkPhysicalDeviceVulkan12Properties p12;
 		VkPhysicalDeviceVulkan13Properties p13;
@@ -482,7 +482,6 @@ namespace GSDriverReport
 		}
 		w.EndObject();
 
-		// Features: 1.0 on its own, then the Features2 chain.
 		steps.Run(prefix + ".features", [&](std::string& err) {
 			if (!get_features)
 			{
@@ -628,7 +627,6 @@ namespace GSDriverReport
 		w.Key("extensions");
 		WriteExtensionList(w, extensions);
 
-		// ARMSX2's view of this device's extensions.
 		w.Key("armsx2_extensions");
 		w.BeginObject();
 		if (live)

@@ -52,7 +52,8 @@ public:
 	// Destroys a previously-created surface.
 	static void DestroyVulkanSurface(VkInstance instance, WindowInfo* wi, VkSurfaceKHR surface);
 
-	// Create a new swap chain from a pre-existing surface.
+	// Create a new swap chain from a pre-existing surface. The swap chain owns the surface from here on,
+	// and destroys it if creation fails, so the caller must not destroy it after this call.
 	static std::unique_ptr<VKSwapChain> Create(const WindowInfo& wi, VkSurfaceKHR surface, VkPresentModeKHR present_mode,
 		std::optional<bool> exclusive_fullscreen_control);
 
@@ -115,6 +116,12 @@ public:
 	/// already using one of those, so this is imageCount - minImageCount. Frame generation must
 	/// not acquire more than this: doing so is undefined behaviour, not a recoverable error.
 	__fi u32 GetExtraAcquirableImages() const { return m_extra_acquirable_images; }
+
+	/// Whether this swap chain asked for frame generation's extra images when it was built
+	/// (GSConfig.LsfgEnabled was on then). When it did and still has none to spare, the driver
+	/// gave all it will, and rebuilding it again would not help.
+	__fi bool IsSizedForFrameGeneration() const { return m_sized_for_frame_generation; }
+
 	VkResult AcquireNextImage();
 	void ReleaseCurrentImage();
 	void ResetImageAcquireResult();
@@ -125,11 +132,18 @@ public:
 	// Change vsync enabled state. This may fail as it causes a swapchain recreation.
 	bool SetPresentMode(VkPresentModeKHR present_mode);
 
+	/// Rebuild at the current size with this present mode, even when the mode is unchanged (so the
+	/// image count is chosen afresh). Same contract as ResizeSwapChain: no command buffer that is
+	/// recording or in flight may reference the swap chain, so wait for the GPU first and never
+	/// call this between acquiring an image and submitting the present.
+	bool RebuildSwapChain(VkPresentModeKHR present_mode);
+
 private:
 	VKSwapChain(const WindowInfo& wi, VkSurfaceKHR surface, VkPresentModeKHR present_mode,
 		std::optional<bool> exclusive_fullscreen_control);
 
 	static std::optional<VkSurfaceFormatKHR> SelectSurfaceFormat(VkSurfaceKHR surface);
+	static bool SurfaceListsNoFormats(VkSurfaceKHR surface);
 
 	bool CreateSwapChain();
 	void DestroySwapChain();
@@ -150,6 +164,7 @@ private:
 
 	std::vector<std::unique_ptr<GSTextureVK>> m_images;
 	u32 m_extra_acquirable_images = 0;
+	bool m_sized_for_frame_generation = false;
 	std::array<ImageSemaphores, NUM_SEMAPHORES> m_semaphores = {};
 
 	u32 m_current_image = 0;
