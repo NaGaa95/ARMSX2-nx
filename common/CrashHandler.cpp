@@ -180,7 +180,8 @@ void CrashHandler::WriteDumpForCaller()
 
 #include <signal.h>
 
-#if !defined(__APPLE__)
+// (Horizon has no signals: the Switch builds keep the stubs below, as macOS keeps its own.)
+#if !defined(__APPLE__) && !defined(__SWITCH__)
 
 #include <atomic>
 #include <cerrno>
@@ -488,7 +489,7 @@ void CrashHandler::WriteDumpForCaller()
 {
 }
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__SWITCH__)
 
 void CrashHandler::RecordReplacedHandler(int signal, const struct sigaction& replaced)
 {

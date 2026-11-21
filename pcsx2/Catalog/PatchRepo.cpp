@@ -346,9 +346,19 @@ namespace Catalog
 		if (!m_thread.joinable())
 			return;
 		if (m_thread.get_id() == std::this_thread::get_id())
+		{
+#ifdef __SWITCH2__
+			// libounce cannot detach a thread (std::thread::detach throws, and that aborts): leave this one to the
+			// exit cleanup, which releases every thread nobody joined.
+			new std::thread(std::move(m_thread));
+#else
 			m_thread.detach();
+#endif
+		}
 		else
+		{
 			m_thread.join();
+		}
 	}
 
 	void PatchSearchJob::Cancel()

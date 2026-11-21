@@ -204,6 +204,20 @@ void HostSys::DestroySharedMemory(void* ptr)
 		free(ptr);
 }
 
+bool HostSys::DiscardSharedMemory(void* ptr, size_t offset, size_t size)
+{
+	(void)ptr;
+	(void)offset;
+	(void)size;
+	return false;
+}
+
+void HostSys::DiscardMemory(void* ptr, size_t size)
+{
+	// (no way to hand heap pages back to Horizon one by one)
+	std::memset(ptr, 0, size);
+}
+
 size_t HostSys::GetRuntimePageSize()
 {
 	return 0x1000;

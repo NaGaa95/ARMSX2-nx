@@ -11,6 +11,9 @@
 
 #ifdef _WIN32
 #include "common/RedtapeWindows.h"
+#elif defined(__SWITCH__)
+#include <cstring>
+#include <malloc.h>
 #else
 #include <sys/mman.h>
 #endif
@@ -34,6 +37,11 @@ namespace mVUJumpTable
 		{
 #ifdef _WIN32
 			void* const slab = VirtualAlloc(nullptr, kSlabBytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#elif defined(__SWITCH__)
+			// (Horizon has no lazily backed anonymous mappings: the slab is ordinary zeroed heap)
+			void* const slab = memalign(__pagesize, kSlabBytes);
+			if (slab)
+				std::memset(slab, 0, kSlabBytes);
 #else
 			void* const slab = mmap(nullptr, kSlabBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
 #if defined(__linux__) && defined(MADV_NOHUGEPAGE)
