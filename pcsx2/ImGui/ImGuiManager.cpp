@@ -8,7 +8,12 @@
 #include "GS/Renderers/Common/GSHeadlessPresent.h"
 #include "Host.h"
 #include "IconsFontAwesome.h"
+#ifdef __SWITCH2__
+#include "Achievements.h"
+#include "ImGui/SwitchQuickMenu.h"
+#else
 #include "ImGui/FullscreenUI.h"
+#endif
 #include "ImGui/ImGuiFullscreen.h"
 #include "ImGui/ImGuiManager.h"
 #include "ImGui/ImGuiOverlays.h"
@@ -138,7 +143,11 @@ static constexpr float OSD_FADE_IN_TIME = 0.1f;
 static constexpr float OSD_FADE_OUT_TIME = 0.4f;
 
 // need to keep track of this, so we can reinitialize on renderer switch
+#ifdef __SWITCH2__
+static bool s_game_notifications_initialized = false;
+#else
 static bool s_fullscreen_ui_was_initialized = false;
+#endif
 static bool s_scale_changed = false;
 
 static std::array<ImGuiManager::SoftwareCursor, InputManager::MAX_SOFTWARE_CURSORS> s_software_cursors = {};
@@ -211,6 +220,11 @@ bool ImGuiManager::Initialize()
 	SetKeyMap();
 	SetStyle();
 
+#ifdef __SWITCH2__
+	ImGuiFullscreen::SetTheme("Dark");
+	ImGuiFullscreen::UpdateLayoutScale();
+	ImGuiFullscreen::UpdateFontScale();
+#else
 	const bool add_fullscreen_fonts = s_fullscreen_ui_was_initialized;
 	pxAssertRel(!FullscreenUI::IsInitialized(), "Fullscreen UI is not initialized on ImGui init");
 	if (add_fullscreen_fonts)
@@ -218,6 +232,7 @@ bool ImGuiManager::Initialize()
 		ImGuiFullscreen::UpdateLayoutScale();
 		ImGuiFullscreen::UpdateFontScale();
 	}
+#endif
 
 	IMGUI_BREADCRUMB("ImGuiManager::Initialize: AddImGuiFonts");
 	if (!AddImGuiFonts())
@@ -232,6 +247,9 @@ bool ImGuiManager::Initialize()
 	NewFrame();
 	IMGUI_BREADCRUMB("ImGuiManager::Initialize: NewFrame done");
 
+#ifdef __SWITCH2__
+	s_game_notifications_initialized = ImGuiFullscreen::Initialize("fullscreenui/placeholder.png");
+#else
 	// reinitialize fsui if it was previously enabled
 	if (add_fullscreen_fonts)
 	{
@@ -239,6 +257,7 @@ bool ImGuiManager::Initialize()
 		InitializeFullscreenUI();
 		IMGUI_BREADCRUMB("ImGuiManager::Initialize: re-InitializeFullscreenUI done");
 	}
+#endif
 
 	IMGUI_BREADCRUMB("ImGuiManager::Initialize: CreateSoftwareCursorTextures");
 	CreateSoftwareCursorTextures();
@@ -246,10 +265,26 @@ bool ImGuiManager::Initialize()
 	return true;
 }
 
+#ifdef __SWITCH2__
+bool ImGuiManager::CanRenderGameNotifications()
+{
+	return s_game_notifications_initialized;
+}
+#else
 bool ImGuiManager::InitializeFullscreenUI()
 {
 	s_fullscreen_ui_was_initialized = !ImGui::GetCurrentContext() || FullscreenUI::Initialize();
 	return s_fullscreen_ui_was_initialized;
+}
+#endif
+
+bool ImGuiManager::HasActiveMenu()
+{
+#ifdef __SWITCH2__
+	return SwitchQuickMenu::IsOpen();
+#else
+	return FullscreenUI::HasActiveWindow();
+#endif
 }
 
 void ImGuiManager::Shutdown(bool clear_state)
@@ -258,11 +293,17 @@ void ImGuiManager::Shutdown(bool clear_state)
 
 	DestroySoftwareCursorTextures();
 
+#ifdef __SWITCH2__
+	SwitchQuickMenu::OnGSShutdown();
+	ImGuiFullscreen::Shutdown(clear_state);
+	s_game_notifications_initialized = false;
+#else
 	FullscreenUI::Shutdown(clear_state);
-	ImGuiFullscreen::SetFont(nullptr);
-	SaveStateSelectorUI::DestroyTextures();
 	if (clear_state)
 		s_fullscreen_ui_was_initialized = false;
+#endif
+	ImGuiFullscreen::SetFont(nullptr);
+	SaveStateSelectorUI::DestroyTextures();
 
 	g_gs_device->DestroyImGuiTextures();
 
@@ -367,8 +408,10 @@ void ImGuiManager::UpdateScale()
 
 	ImGuiFullscreen::UpdateFontScale();
 
+#ifndef __SWITCH2__
 	if (FullscreenUI::IsInitialized())
 		FullscreenUI::ReloadSvgResources();
+#endif
 }
 
 void ImGuiManager::NewFrame()
@@ -1187,7 +1230,18 @@ void ImGuiManager::RenderOSD()
 	const Common::Timer::Value current_time = Common::Timer::GetCurrentValue();
 	AcquirePendingOSDMessages(current_time);
 
-	if (!FullscreenUI::HasActiveWindow())
+#ifdef __SWITCH2__
+	if (s_game_notifications_initialized)
+	{
+		ImGuiFullscreen::UploadAsyncTextures();
+		ImGuiFullscreen::PushResetLayout();
+		if (!HasActiveMenu() && (EmuConfig.Achievements.Overlays || EmuConfig.Achievements.LBOverlays))
+			Achievements::DrawGameOverlays();
+		ImGuiFullscreen::RenderNotifications();
+		ImGuiFullscreen::PopResetLayout();
+	}
+#endif
+	if (!HasActiveMenu())
 	{
 		// Don't draw OSD when we're just running big picture.
 		if (VMManager::HasValidVM())
@@ -1213,7 +1267,7 @@ bool ImGuiManager::HasPresentableOverlayContent()
 	if (!s_osd_active_messages.empty())
 		return true;
 
-	return FullscreenUI::HasActiveWindow() || ImGuiFullscreen::HasActiveNotifications();
+	return HasActiveMenu() || ImGuiFullscreen::HasActiveNotifications();
 }
 
 float ImGuiManager::GetGlobalScale()

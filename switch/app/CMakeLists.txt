@@ -7,7 +7,6 @@ enable_language(ASM)
 add_executable(yadokari
 	main.cpp
 	HorizonHost.cpp
-	HorizonUsbStorage.cpp
 	HorizonException.cpp
 	HorizonExceptionEntry.S
 	HorizonThreadWrap.cpp
@@ -19,6 +18,7 @@ set_source_files_properties(HorizonException.cpp HorizonExceptionEntry.S
 # USB mass-storage support. Not on the Switch 2: kaiHEN never answers a usb:hs lookup.
 if(NOT NINTENDO_SWITCH2)
 	include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/UsbHsFs.cmake")
+	target_sources(yadokari PRIVATE HorizonUsbStorage.cpp)
 	target_compile_definitions(yadokari PRIVATE YADOKARI_USB_STORAGE=1)
 endif()
 

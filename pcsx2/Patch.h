@@ -164,6 +164,9 @@ namespace Patch
 	extern const char* PATCH_DISABLE_CONFIG_KEY;
 
 	extern std::vector<PatchInfo> GetPatchInfo(const std::string_view serial, u32 crc, bool cheats, bool showAllCRCS, u32* num_unlabelled_patches);
+#ifdef __SWITCH2__
+	bool IsNamedPatchEnabled(std::string_view name, bool cheats);
+#endif
 
 	/// Returns the path to a new cheat/patch pnach for the specified serial and CRC.
 	extern std::string GetPnachFilename(const std::string_view serial, u32 crc, bool cheats);

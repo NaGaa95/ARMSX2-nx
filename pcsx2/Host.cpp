@@ -453,3 +453,15 @@ void Host::Internal::SetAutoTuneSettingsLayer(SettingsInterface* sif, std::uniqu
 {
 	s_layered_settings_interface.SetLayer(LayeredSettingsInterface::LAYER_AUTOTUNE, sif);
 }
+
+#ifdef __SWITCH2__
+SettingsInterface* Host::Internal::GetSwitchSessionSettingsLayer()
+{
+	return s_layered_settings_interface.GetLayer(LayeredSettingsInterface::LAYER_SWITCH_SESSION);
+}
+
+void Host::Internal::SetSwitchSessionSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>&)
+{
+	s_layered_settings_interface.SetLayer(LayeredSettingsInterface::LAYER_SWITCH_SESSION, sif);
+}
+#endif

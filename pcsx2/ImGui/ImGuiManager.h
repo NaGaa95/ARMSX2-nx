@@ -33,7 +33,12 @@ namespace ImGuiManager
 	bool Initialize();
 
 	/// Initializes fullscreen UI.
+#ifdef __SWITCH2__
+	bool CanRenderGameNotifications();
+#else
 	bool InitializeFullscreenUI();
+#endif
+	bool HasActiveMenu();
 
 	/// Frees all ImGui resources.
 	void Shutdown(bool clear_state);

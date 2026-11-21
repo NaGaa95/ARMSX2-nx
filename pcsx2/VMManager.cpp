@@ -24,7 +24,9 @@
 #include "GameList.h"
 #include "Host.h"
 #include "INISettingsInterface.h"
+#ifndef __SWITCH2__
 #include "ImGui/FullscreenUI.h"
+#endif
 #include "ImGui/ImGuiOverlays.h"
 #include "Input/InputManager.h"
 #include "IopBios.h"
@@ -66,6 +68,7 @@
 #include "common/FPControl.h"
 #include "common/HostSys.h"
 #include "common/Perf.h"
+#include "common/ProgressCallback.h"
 #include "common/ScopedGuard.h"
 #include "common/SettingsWrapper.h"
 #include "common/SmallString.h"
@@ -403,7 +406,9 @@ void VMManager::SetState(VMState state)
 		}
 		else
 		{
+#ifndef __SWITCH2__
 			FullscreenUI::OnVMResumed();
+#endif
 			Host::OnVMResumed();
 			ResetResumeTimestamp();
 		}
@@ -894,6 +899,27 @@ void VMManager::ReloadInputBindings(bool force)
 	LoadInputBindings(*si, lock);
 }
 
+// What the player set for this game, which the game database does not overwrite: the game layer and, on the Switch 2,
+// the launcher's per-game layer and the quick menu's session layer. Callers hold the settings lock.
+static PerGameOverrides GetUserGameOverrides()
+{
+	PerGameOverrides overrides;
+	if (const SettingsInterface* layer = Host::Internal::GetGameSettingsLayer())
+		overrides = ComputePerGameOverrides(*layer);
+#ifdef __SWITCH2__
+	if (const SettingsInterface* layer = Host::Internal::GetSwitchSessionSettingsLayer())
+	{
+		const PerGameOverrides additional = ComputePerGameOverrides(*layer);
+		overrides.gs_fixes |= additional.gs_fixes;
+		overrides.gs_hacks |= additional.gs_hacks;
+		overrides.core |= additional.core;
+		overrides.speedhacks |= additional.speedhacks;
+		overrides.gamefixes |= additional.gamefixes;
+	}
+#endif
+	return overrides;
+}
+
 void VMManager::LoadCoreSettings(SettingsInterface& si)
 {
 	SettingsLoadWrapper slw(si);
@@ -912,15 +938,10 @@ void VMManager::LoadCoreSettings(SettingsInterface& si)
 	// The two cycle-rate claims come from the same read. They are key presence, not value
 	// comparison: a per-game EECycleRate equal to the global one is still an explicit
 	// per-game choice, and the dynamic governor must leave it alone.
-	EmuConfig.PerGameClaimsEECycleRate = false;
-	EmuConfig.PerGameClaimsDynamicEECycleRate = false;
-	if (const SettingsInterface* game_layer = Host::Internal::GetGameSettingsLayer())
-	{
-		const PerGameOverrides overrides = ComputePerGameOverrides(*game_layer);
-		EmuConfig.GS.UserHackOverrides |= overrides.gs_hacks;
-		EmuConfig.PerGameClaimsEECycleRate = overrides.Has(SpeedHack::EECycleRate);
-		EmuConfig.PerGameClaimsDynamicEECycleRate = overrides.Has(SpeedHack::DynamicEECycleRate);
-	}
+	const PerGameOverrides overrides = GetUserGameOverrides();
+	EmuConfig.GS.UserHackOverrides |= overrides.gs_hacks;
+	EmuConfig.PerGameClaimsEECycleRate = overrides.Has(SpeedHack::EECycleRate);
+	EmuConfig.PerGameClaimsDynamicEECycleRate = overrides.Has(SpeedHack::DynamicEECycleRate);
 
 	// An auto-tune trial of the governor is the per-game key it becomes if kept: the keep writes it
 	// into the game's file, where it claims the governor over a pinned rate. The trial has to
@@ -1073,9 +1094,7 @@ void VMManager::ApplyGameFixes()
 	{
 		if (const GameDatabaseSchema::GameEntry* game = GameDatabase::findGame(s_disc_serial))
 		{
-			PerGameOverrides overrides;
-			if (const SettingsInterface* game_layer = Host::Internal::GetGameSettingsLayer())
-				overrides = ComputePerGameOverrides(*game_layer);
+			const PerGameOverrides overrides = GetUserGameOverrides();
 
 			game->applyGameFixes(EmuConfig, EmuConfig.EnableGameFixes, overrides);
 			game->applyGSHardwareFixes(EmuConfig.GS, overrides);
@@ -1102,13 +1121,7 @@ void VMManager::ApplyGameFixes()
 	if (!game)
 		return;
 
-	// What the player set for this game specifically, which the database does not get
-	// to overwrite. Read from the game layer alone — the layered stack cannot tell a
-	// per-game choice from a global one, and only the per-game one outranks the
-	// database. The settings lock is held by both callers of this function.
-	PerGameOverrides overrides;
-	if (const SettingsInterface* game_layer = Host::Internal::GetGameSettingsLayer())
-		overrides = ComputePerGameOverrides(*game_layer);
+	const PerGameOverrides overrides = GetUserGameOverrides();
 
 	game->applyGameFixes(EmuConfig, EmuConfig.EnableGameFixes, overrides);
 	game->applyGSHardwareFixes(EmuConfig.GS, overrides);
@@ -1688,7 +1701,9 @@ void VMManager::ReportGameChangeToHost()
 	const u32 crc_to_report = HasBootedELF() ? s_current_crc : 0;
 	const bool prefer_english = Host::GetBaseBoolSettingValue("UI", "PreferEnglishGameList", false);
 	const std::string game_title = GetTitle(prefer_english);
+#ifndef __SWITCH2__
 	FullscreenUI::GameChanged(disc_path, s_disc_serial, game_title, s_disc_crc, crc_to_report);
+#endif
 	Host::OnGameChanged(game_title, s_elf_override, disc_path, s_disc_serial, s_disc_crc, crc_to_report);
 }
 
@@ -2125,7 +2140,9 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 		ClearDiscDetails();
 
 		Achievements::GameChanged(0, 0);
+#ifndef __SWITCH2__
 		FullscreenUI::GameChanged(s_title, std::string(), s_disc_serial, 0, 0);
+#endif
 		UpdateDiscordPresence(true);
 		Host::OnGameChanged(s_title, std::string(), std::string(), s_disc_serial, 0, 0);
 
@@ -2456,7 +2473,9 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 	// and touches the audio stream the IOP thread started above writes.
 	IopThread::OnVmPaused(true);
 	Host::OnVMStarted();
+#ifndef __SWITCH2__
 	FullscreenUI::OnVMStarted();
+#endif
 	UpdateInhibitScreensaver(EmuConfig.InhibitScreensaver);
 
 	// A BIOS-only boot has no game ELF or replacement-texture map to signal the
@@ -2538,7 +2557,9 @@ void VMManager::Shutdown(bool save_resume_state)
 	}
 
 	Achievements::GameChanged(0, 0);
+#ifndef __SWITCH2__
 	FullscreenUI::GameChanged(s_title, std::string(), s_disc_serial, 0, 0);
+#endif
 	UpdateDiscordPresence(true);
 	Host::OnGameChanged(s_title, std::string(), std::string(), s_disc_serial, 0, 0);
 
@@ -2590,7 +2611,9 @@ void VMManager::Shutdown(bool save_resume_state)
 	cdvdUnlock();
 
 	s_state.store(VMState::Shutdown, std::memory_order_release);
+#ifndef __SWITCH2__
 	FullscreenUI::OnVMDestroyed();
+#endif
 	SaveStateSelectorUI::Clear();
 	UpdateInhibitScreensaver(false);
 	SetEmuThreadAffinities();
@@ -4247,7 +4270,9 @@ void VMManager::CheckForConfigChanges(const Pcsx2Config& old_config)
 	if (EmuConfig.Achievements != old_config.Achievements)
 		Achievements::UpdateSettings(old_config.Achievements);
 
+#ifndef __SWITCH2__
 	FullscreenUI::CheckForConfigChanges(old_config);
+#endif
 
 	CheckForMiscConfigChanges(old_config);
 

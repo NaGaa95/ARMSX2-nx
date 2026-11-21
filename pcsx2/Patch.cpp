@@ -1392,6 +1392,14 @@ bool Patch::IsGloballyToggleablePatch(const PatchInfo& patch_info)
 	return patch_info.name == WS_PATCH_NAME || patch_info.name == NI_PATCH_NAME;
 }
 
+#ifdef __SWITCH2__
+bool Patch::IsNamedPatchEnabled(std::string_view name, bool cheats)
+{
+	const auto& enabled = cheats ? s_enabled_cheats : s_enabled_patches;
+	return std::find(enabled.begin(), enabled.end(), name) != enabled.end();
+}
+#endif
+
 void Patch::ApplyDynamicPatches(u32 pc)
 {
 	for (const auto& dynpatch : s_active_pnach_dynamic_patches)

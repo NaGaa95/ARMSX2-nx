@@ -198,6 +198,11 @@ namespace Host
 		/// Sets the auto-tune trial layer, which sits above the game layer. Called by AutoTune; null removes it.
 		void SetAutoTuneSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>& settings_lock);
 
+#ifdef __SWITCH2__
+		SettingsInterface* GetSwitchSessionSettingsLayer();
+		void SetSwitchSessionSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>& settings_lock);
+#endif
+
 		/// Implementation to retrieve a translated string.
 		s32 GetTranslatedStringImpl(const std::string_view context, const std::string_view msg, char* tbuf, size_t tbuf_space);
 	} // namespace Internal

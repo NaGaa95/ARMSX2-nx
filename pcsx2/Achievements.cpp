@@ -8,7 +8,9 @@
 #include "Elfheader.h"
 #include "Host.h"
 #include "GS/Renderers/Common/GSTexture.h"
+#ifndef __SWITCH2__
 #include "ImGui/FullscreenUI.h"
+#endif
 #include "ImGui/ImGuiFullscreen.h"
 #include "ImGui/ImGuiManager.h"
 #include "IopMem.h"
@@ -122,8 +124,8 @@ namespace Achievements
 	static void EnsureCacheDirectoriesExist();
 	static void ClearGameInfo();
 	static void ClearGameHash();
-	static void BeginLoadingScreen(const char* text, bool* was_running_idle);
-	static void EndLoadingScreen(bool was_running_idle);
+	static void BeginLoadingScreen(const char* text);
+	static void EndLoadingScreen();
 	static std::string_view GetELFNameForHash(const std::string& elf_path);
 	static std::string GetGameHash(const std::string& elf_path);
 	static void SetHardcoreMode(bool enabled, bool force_display_message);
@@ -176,8 +178,9 @@ namespace Achievements
 	static void UpdateNotificationPosition();
 
 	static std::string GetAchievementBadgePath(const rc_client_achievement_t* achievement, int state);
-	static std::string GetSubsetBadgePath(const rc_client_subset_t* subset);
 	static std::string GetUserBadgePath(const std::string_view username);
+	static std::string GetSubsetBadgePath(const rc_client_subset_t* subset);
+#ifndef __SWITCH2__
 	static std::string GetLeaderboardUserBadgePath(const rc_client_leaderboard_entry_t* entry);
 
 	static void DrawAchievement(const rc_client_achievement_t* cheevo);
@@ -195,6 +198,7 @@ namespace Achievements
 	static void FetchNextLeaderboardEntries();
 	static void CloseLeaderboard();
 	static void CloseSubset();
+#endif
 
 	static bool s_hardcore_mode = false;
 
@@ -204,6 +208,10 @@ namespace Achievements
 
 	static std::recursive_mutex s_achievements_mutex;
 	static rc_client_t* s_client;
+#ifdef __SWITCH2__
+	static rc_client_async_handle_t* s_switch_leaderboard_request;
+	static LeaderboardCallback s_switch_leaderboard_callback;
+#endif
 	static std::string s_image_directory;
 	static std::unique_ptr<HTTPDownloader> s_http_downloader;
 
@@ -224,6 +232,7 @@ namespace Achievements
 	static rc_client_async_handle_t* s_login_request;
 	static rc_client_async_handle_t* s_load_game_request;
 
+#ifndef __SWITCH2__
 	static rc_client_achievement_list_t* s_achievement_list;
 	static rc_client_subset_list_t* s_subset_list;
 	static rc_client_leaderboard_list_t* s_leaderboard_list;
@@ -243,6 +252,7 @@ namespace Achievements
 
 	static std::map<std::pair<u32, u32>, bool> s_achievement_buckets_collapsed;
 	static std::map<std::pair<u32, u8>, bool> s_leaderboard_buckets_collapsed;
+#endif
 
 	static std::vector<LeaderboardTrackerIndicator> s_active_leaderboard_trackers;
 	static std::vector<AchievementChallengeIndicator> s_active_challenge_indicators;
@@ -255,20 +265,28 @@ std::unique_lock<std::recursive_mutex> Achievements::GetLock()
 	return std::unique_lock(s_achievements_mutex);
 }
 
-void Achievements::BeginLoadingScreen(const char* text, bool* was_running_idle)
+void Achievements::BeginLoadingScreen(const char* text)
 {
 	// FullscreenUI's progress dialog is offscreen on platforms with their own UI (iOS),
 	// and initializing it here would spin up its per-frame render loop for nothing.
 	if (Host::HasNativeAchievementNotifications())
 		return;
 
+#ifndef __SWITCH2__
 	MTGS::RunOnGSThread(&ImGuiManager::InitializeFullscreenUI);
+#endif
 	ImGuiFullscreen::OpenProgressDialog("achievements_loading", text, 0, 0, 0);
+#ifdef __SWITCH2__
+	MTGS::PresentCurrentFrame();
+#endif
 }
 
-void Achievements::EndLoadingScreen(bool was_running_idle)
+void Achievements::EndLoadingScreen()
 {
 	ImGuiFullscreen::CloseProgressDialog("achievements_loading");
+#ifdef __SWITCH2__
+	MTGS::PresentCurrentFrame();
+#endif
 }
 
 void Achievements::ReportError(const std::string_view sv)
@@ -1428,11 +1446,13 @@ void Achievements::ClientLoadGameCallback(int result, const char* error_message,
 	s_game_icon = {};
 	s_game_icon_url = info->badge_url;
 
+#ifndef __SWITCH2__
 	// FullscreenUI is only needed when notifications render through ImGui. Platforms with
 	// native notifications skip this so FullscreenUI never initializes and its per-frame
 	// render work stays disabled.
 	if (!Host::HasNativeAchievementNotifications())
 		MTGS::RunOnGSThread(&ImGuiManager::InitializeFullscreenUI);
+#endif
 
 	if (const std::string_view badge_name = info->badge_name; !badge_name.empty())
 	{
@@ -1449,8 +1469,12 @@ void Achievements::ClientLoadGameCallback(int result, const char* error_message,
 
 void Achievements::ClearGameInfo()
 {
+#ifdef __SWITCH2__
+	CancelLeaderboardEntries();
+#else
 	if (MTGS::IsOpen())
 		MTGS::RunOnGSThread(&Achievements::ClearUIState);
+#endif
 
 	if (s_load_game_request)
 	{
@@ -1497,11 +1521,20 @@ static void PostAchievementNotification(std::string key, float duration, std::st
 
 	MTGS::RunOnGSThread([key = std::move(key), duration, title = std::move(title),
 		message = std::move(message), badge_path = std::move(badge_path)]() {
+#ifdef __SWITCH2__
+		if (!ImGuiManager::CanRenderGameNotifications())
+		{
+			Host::AddKeyedOSDMessage(key, message.empty() ? title : fmt::format("{}\n{}", title, message), duration);
+			return;
+		}
+		ImGuiFullscreen::AddNotification(key, duration, std::move(title), std::move(message), std::move(badge_path));
+#else
 		if (ImGuiManager::InitializeFullscreenUI())
 		{
 			ImGuiFullscreen::AddNotification(key, duration, std::move(title), std::move(message),
 				std::move(badge_path));
 		}
+#endif
 	});
 }
 
@@ -1546,8 +1579,11 @@ void Achievements::DisplayHardcoreDeferredMessage()
 		return;
 
 	MTGS::RunOnGSThread([]() {
-		if (VMManager::HasValidVM() && EmuConfig.Achievements.HardcoreMode && !s_hardcore_mode &&
-			ImGuiManager::InitializeFullscreenUI())
+		if (VMManager::HasValidVM() && EmuConfig.Achievements.HardcoreMode && !s_hardcore_mode
+#ifndef __SWITCH2__
+			&& ImGuiManager::InitializeFullscreenUI()
+#endif
+		)
 		{
 			Host::AddIconOSDMessage(
 				"hardcore_on_reset", ICON_PF_DUMBELL, TRANSLATE_STR("Achievements", "Hardcore mode will be enabled on system reset."),
@@ -1941,13 +1977,14 @@ void Achievements::SetHardcoreMode(bool enabled, bool force_display_message)
 		!Host::HasNativeAchievementNotifications())
 	{
 		MTGS::RunOnGSThread([enabled]() {
-			if (ImGuiManager::InitializeFullscreenUI())
-			{
-				Host::AddIconOSDMessage("hardcore_status", ICON_PF_DUMBELL,
-					enabled ? TRANSLATE_STR("Achievements", "Hardcore mode is now enabled.") :
-							  TRANSLATE_STR("Achievements", "Hardcore mode is now disabled."),
-					Host::OSD_INFO_DURATION);
-			}
+#ifndef __SWITCH2__
+			if (!ImGuiManager::InitializeFullscreenUI())
+				return;
+#endif
+			Host::AddIconOSDMessage("hardcore_status", ICON_PF_DUMBELL,
+				enabled ? TRANSLATE_STR("Achievements", "Hardcore mode is now enabled.") :
+						  TRANSLATE_STR("Achievements", "Hardcore mode is now disabled."),
+				Host::OSD_INFO_DURATION);
 		});
 	}
 
@@ -1959,9 +1996,10 @@ void Achievements::SetHardcoreMode(bool enabled, bool force_display_message)
 		DisplayAchievementSummary();
 	}
 
-	// Toss away UI state, because it's invalid now
+#ifndef __SWITCH2__
 	if (MTGS::IsOpen())
 		MTGS::RunOnGSThread(&Achievements::ClearUIState);
+#endif
 
 	Host::OnAchievementsHardcoreModeChanged(enabled);
 }
@@ -1997,10 +2035,9 @@ void Achievements::LoadState(std::span<const u8> data)
 	// before deserializing, otherwise that state's going to get lost.
 	if (s_http_downloader->HasAnyRequests())
 	{
-		bool was_running_idle;
-		BeginLoadingScreen("Downloading achievements data...", &was_running_idle);
+		BeginLoadingScreen("Downloading achievements data...");
 		s_http_downloader->WaitForAllRequests();
-		EndLoadingScreen(was_running_idle);
+		EndLoadingScreen();
 	}
 
 	if (data.empty())
@@ -2100,6 +2137,7 @@ std::string Achievements::GetUserBadgePath(const std::string_view username)
 	return path;
 }
 
+#ifndef __SWITCH2__
 std::string Achievements::GetLeaderboardUserBadgePath(const rc_client_leaderboard_entry_t* entry)
 {
 	// TODO: maybe we should just cache these in memory...
@@ -2117,6 +2155,7 @@ std::string Achievements::GetLeaderboardUserBadgePath(const rc_client_leaderboar
 
 	return path;
 }
+#endif
 
 bool Achievements::IsLoggedInOrLoggingIn()
 {
@@ -2342,6 +2381,7 @@ std::string Achievements::GetHardcoreModeDisableText(const char* reason)
 		reason);
 }
 
+#ifndef __SWITCH2__
 void Achievements::ClearUIState()
 {
 	if (FullscreenUI::IsAchievementsWindowOpen() || FullscreenUI::IsLeaderboardsWindowOpen())
@@ -2367,6 +2407,7 @@ void Achievements::ClearUIState()
 	s_achievement_buckets_collapsed.clear();
 	s_leaderboard_buckets_collapsed.clear();
 }
+#endif
 
 template <typename T>
 static float IndicatorOpacity(const T& i)
@@ -2663,6 +2704,7 @@ void Achievements::DrawGameOverlays()
 	}
 }
 
+#ifndef __SWITCH2__
 void Achievements::DrawPauseMenuOverlays()
 {
 	using ImGuiFullscreen::g_large_font;
@@ -4079,6 +4121,8 @@ void Achievements::CloseLeaderboard()
 	s_open_leaderboard = nullptr;
 }
 
+#endif
+
 std::string Achievements::GetSubsetBadgePath(const rc_client_subset_t* subset)
 {
 	if (!subset || !subset->badge_name[0])
@@ -4091,6 +4135,7 @@ std::string Achievements::GetSubsetBadgePath(const rc_client_subset_t* subset)
 	return path;
 }
 
+#ifndef __SWITCH2__
 void Achievements::OpenSubset(const rc_client_subset_t* subset)
 {
 	Console.WriteLn("Achievements: Opening subset '%s' (%u)", subset->title, subset->id);
@@ -4101,6 +4146,7 @@ void Achievements::CloseSubset()
 {
 	s_open_subset = nullptr;
 }
+#endif
 
 #ifdef ENABLE_RAINTEGRATION
 
@@ -4419,5 +4465,81 @@ bool Achievements::GetCurrentAchievementList(std::vector<AchievementInfo>* achie
 	rc_client_destroy_achievement_list(list);
 	return true;
 }
+
+#ifdef __SWITCH2__
+std::vector<Achievements::LeaderboardInfo> Achievements::GetCurrentLeaderboards()
+{
+	const auto lock = GetLock();
+	std::vector<LeaderboardInfo> rows;
+	if (!s_client)
+		return rows;
+
+	const std::unique_ptr<rc_client_leaderboard_list_t, decltype(&rc_client_destroy_leaderboard_list)> list(
+		rc_client_create_leaderboard_list(s_client, RC_CLIENT_LEADERBOARD_LIST_GROUPING_NONE),
+		rc_client_destroy_leaderboard_list);
+	if (!list)
+		return rows;
+	for (u32 b = 0; b < list->num_buckets; ++b)
+	{
+		const auto& bucket = list->buckets[b];
+		for (u32 i = 0; i < bucket.num_leaderboards; ++i)
+		{
+			const auto* entry = bucket.leaderboards[i];
+			if (entry)
+				rows.push_back({entry->id, entry->title ? entry->title : "", entry->description ? entry->description : ""});
+		}
+	}
+	return rows;
+}
+
+void Achievements::CancelLeaderboardEntries()
+{
+	const auto lock = GetLock();
+	if (s_client && s_switch_leaderboard_request)
+		rc_client_abort_async(s_client, s_switch_leaderboard_request);
+	s_switch_leaderboard_request = nullptr;
+	s_switch_leaderboard_callback = {};
+}
+
+void Achievements::FetchLeaderboardEntries(u32 id, bool around_user, LeaderboardCallback callback)
+{
+	const auto lock = GetLock();
+	CancelLeaderboardEntries();
+	if (!s_client)
+	{
+		callback({}, "RetroAchievements is unavailable.");
+		return;
+	}
+
+	s_switch_leaderboard_callback = std::move(callback);
+	const auto done = [](int result, const char* message, rc_client_leaderboard_entry_list_t* raw_list, rc_client_t*, void*) {
+		const auto lock = GetLock();
+		const std::unique_ptr<rc_client_leaderboard_entry_list_t, decltype(&rc_client_destroy_leaderboard_entry_list)> list(
+			raw_list, rc_client_destroy_leaderboard_entry_list);
+		s_switch_leaderboard_request = nullptr;
+		auto callback = std::exchange(s_switch_leaderboard_callback, {});
+		if (!callback)
+			return;
+		if (result != RC_OK || !list)
+		{
+			callback({}, message ? message : "Could not fetch the leaderboard.");
+			return;
+		}
+		std::vector<LeaderboardEntry> rows;
+		rows.reserve(list->num_entries);
+		for (u32 i = 0; i < list->num_entries; ++i)
+		{
+			const auto& entry = list->entries[i];
+			rows.push_back({entry.rank, entry.user ? entry.user : "", entry.display});
+		}
+		callback(std::move(rows), {});
+	};
+	rc_client_async_handle_t* request = around_user ?
+		rc_client_begin_fetch_leaderboard_entries_around_user(s_client, id, 15, done, nullptr) :
+		rc_client_begin_fetch_leaderboard_entries(s_client, id, 1, 25, done, nullptr);
+	if (s_switch_leaderboard_callback)
+		s_switch_leaderboard_request = request;
+}
+#endif
 
 #endif // ENABLE_RAINTEGRATION

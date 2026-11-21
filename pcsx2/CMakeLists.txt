@@ -1173,15 +1173,6 @@ set(pcsx2HostHeaders
 	Host/AudioStreamTypes.h)
 
 set(pcsx2ImGuiSources
-	ImGui/FullscreenUI.cpp
-	ImGui/FullscreenUI_Drivers.cpp
-	ImGui/FullscreenUI_OnlinePatches.cpp
-	ImGui/FullscreenUI_Packs.cpp
-	ImGui/FullscreenUI_Saves.cpp
-	ImGui/FullscreenUI_Arcade.cpp
-	ImGui/FullscreenUI_Settings.cpp
-	ImGui/FullscreenUI_TexturePacks.cpp
-	ImGui/FullscreenUIShot.cpp
 	ImGui/ImGuiFullscreen.cpp
 	ImGui/ImGuiFullscreen_Keyboard.cpp
 	ImGui/ImGuiManager.cpp
@@ -1189,17 +1180,35 @@ set(pcsx2ImGuiSources
 	ImGui/OnScreenKeyboardModel.cpp
 )
 
+if(NINTENDO_SWITCH2)
+	list(APPEND pcsx2ImGuiSources ImGui/SwitchQuickMenu.cpp)
+else()
+	list(APPEND pcsx2ImGuiSources
+		ImGui/FullscreenUI.cpp
+		ImGui/FullscreenUI_Drivers.cpp
+		ImGui/FullscreenUI_OnlinePatches.cpp
+		ImGui/FullscreenUI_Packs.cpp
+		ImGui/FullscreenUI_Saves.cpp
+		ImGui/FullscreenUI_Arcade.cpp
+		ImGui/FullscreenUI_Settings.cpp
+		ImGui/FullscreenUI_TexturePacks.cpp
+		ImGui/FullscreenUIShot.cpp
+	)
+endif()
+
 set(pcsx2ImGuiHeaders
 	ImGui/FullscreenUI.h
 	ImGui/FullscreenUI_Internal.h
 	ImGui/FullscreenUI_PageDwell.h
 	ImGui/FullscreenUIShot.h
+	ImGui/FullscreenUI_Translations.h
 	ImGui/ImGuiAnimated.h
 	ImGui/ImGuiFullscreen.h
 	ImGui/ImGuiFullscreen_Keyboard.h
 	ImGui/ImGuiManager.h
 	ImGui/ImGuiOverlays.h
 	ImGui/OnScreenKeyboardModel.h
+	ImGui/SwitchQuickMenu.h
 )
 
 set(pcsx2InputSources

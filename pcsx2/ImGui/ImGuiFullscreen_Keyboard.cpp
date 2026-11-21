@@ -3,17 +3,7 @@
 
 #include "ImGui/ImGuiFullscreen_Keyboard.h"
 
-// FullscreenUI_Internal.h is only good for the FSUI_* translation macros here, but it expects these before it.
-#include "Achievements.h"
-#include "Config.h"
-#include "GS/Renderers/Common/GSDevice.h"
-#include "GS/Renderers/Common/GSTexture.h"
-#include "GameList.h"
-#include "Host.h"
-#include "INISettingsInterface.h"
-#include "VMManager.h"
-#include "ImGui/FullscreenUI_Internal.h"
-
+#include "ImGui/FullscreenUI_Translations.h"
 #include "ImGui/ImGuiManager.h"
 #include "Input/InputManager.h"
 

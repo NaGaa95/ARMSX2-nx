@@ -125,6 +125,7 @@ namespace ImGuiFullscreen
 
 	void BeginLayout();
 	void EndLayout();
+	void RenderNotifications();
 
 	void PushResetLayout();
 	void PopResetLayout();

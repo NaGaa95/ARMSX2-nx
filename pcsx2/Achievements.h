@@ -157,11 +157,12 @@ namespace Achievements
 	/// Should be called with the lock held.
 	std::string GetLoggedInUserBadgePath();
 
-	/// Clears all cached state used to render the UI.
-	void ClearUIState();
-
 	/// Draws ImGui overlays when not paused.
 	void DrawGameOverlays();
+
+#ifndef __SWITCH2__
+	/// Clears all cached state used to render the UI.
+	void ClearUIState();
 
 	/// Draws ImGui overlays when paused.
 	void DrawPauseMenuOverlays();
@@ -177,6 +178,7 @@ namespace Achievements
 
 	/// Renders the leaderboard list.
 	void DrawLeaderboardsWindow();
+#endif
 
 #ifdef ENABLE_RAINTEGRATION
 	/// Prevents the internal implementation from being used. Instead, RAIntegration will be
@@ -239,6 +241,26 @@ namespace Achievements
 	bool GetCurrentUserStats(UserStats* stats);
 	bool GetCurrentGameStats(GameStats* stats);
 	bool GetCurrentAchievementList(std::vector<AchievementInfo>* achievements);
+#ifdef __SWITCH2__
+	struct LeaderboardInfo
+	{
+		u32 id;
+		std::string title;
+		std::string description;
+	};
+
+	struct LeaderboardEntry
+	{
+		u32 rank;
+		std::string user;
+		std::string score;
+	};
+
+	using LeaderboardCallback = std::function<void(std::vector<LeaderboardEntry>, std::string)>;
+	std::vector<LeaderboardInfo> GetCurrentLeaderboards();
+	void FetchLeaderboardEntries(u32 id, bool around_user, LeaderboardCallback callback);
+	void CancelLeaderboardEntries();
+#endif
 } // namespace Achievements
 
 /// Functions implemented in the frontend.

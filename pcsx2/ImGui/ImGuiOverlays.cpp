@@ -16,7 +16,9 @@
 #include "Host.h"
 #include "IconsFontAwesome.h"
 #include "IconsPromptFont.h"
+#ifndef __SWITCH2__
 #include "ImGui/FullscreenUI.h"
+#endif
 #include "ImGui/ImGuiAnimated.h"
 #include "ImGui/ImGuiFullscreen.h"
 #include "ImGui/ImGuiManager.h"
@@ -27,6 +29,7 @@
 #include "Patch.h"
 #include "PerformanceMetrics.h"
 #include "Recording/InputRecording.h"
+#include "SaveState.h"
 #include "SIO/Pad/Pad.h"
 #include "SIO/Pad/PadBase.h"
 #include "USB/USB.h"
@@ -1198,7 +1201,7 @@ __ri void ImGuiManager::DrawSettingsOverlay(float scale, float margin, float bot
 	s_settings_overlay_height = 0.0f;
 
 	if (!GSConfig.OsdShowSettings ||
-		FullscreenUI::HasActiveWindow())
+		ImGuiManager::HasActiveMenu())
 		return;
 
 	std::string text;
@@ -1383,7 +1386,7 @@ __ri void ImGuiManager::DrawInputsOverlay(float scale, float margin, float botto
 {
 	// Technically this is racing the CPU thread.. but it doesn't really matter, at worst, the inputs get displayed onscreen late.
 	if (!GSConfig.OsdShowInputs ||
-		FullscreenUI::HasActiveWindow())
+		ImGuiManager::HasActiveMenu())
 		return;
 
 	const float shadow_offset = std::ceil(scale);
@@ -1530,7 +1533,7 @@ __ri void ImGuiManager::DrawInputRecordingOverlay(float& position_y, float scale
 {
 	if (!GSConfig.OsdShowInputRec ||
 		!g_InputRecording.isActive() ||
-		FullscreenUI::HasActiveWindow())
+		ImGuiManager::HasActiveMenu())
 		return;
 
 	const float shadow_offset = std::ceil(scale);
@@ -1575,7 +1578,7 @@ __ri void ImGuiManager::DrawInputRecordingOverlay(float& position_y, float scale
 __ri void ImGuiManager::DrawTextureReplacementsOverlay(float& position_y, float scale, float margin, float spacing)
 {
 	if (!GSConfig.OsdShowTextureReplacements ||
-		FullscreenUI::HasActiveWindow())
+		ImGuiManager::HasActiveMenu())
 		return;
 
 	const bool dumping_active = GSConfig.DumpReplaceableTextures;
@@ -1615,7 +1618,7 @@ __ri void ImGuiManager::DrawTextureReplacementsOverlay(float& position_y, float 
 __ri void ImGuiManager::DrawIndicatorsOverlay(float& position_y, float scale, float margin, float spacing)
 {
 	if (!GSConfig.OsdShowIndicators ||
-		FullscreenUI::HasActiveWindow())
+		ImGuiManager::HasActiveMenu())
 		return;
 
 	const float shadow_offset = std::ceil(scale);
@@ -2055,7 +2058,11 @@ void SaveStateSelectorUI::LoadCurrentSlot()
 	Host::RunOnCPUThread([slot = GetCurrentSlot()]() {
 		Error error;
 		if (!VMManager::LoadStateFromSlot(slot, false, &error))
+#ifdef __SWITCH2__
+			SaveState_ReportLoadErrorOSD(error.GetDescription(), slot, false);
+#else
 			FullscreenUI::ReportStateLoadError(error.GetDescription(), slot, false);
+#endif
 	});
 	Close();
 }
@@ -2065,7 +2072,11 @@ void SaveStateSelectorUI::LoadCurrentBackupSlot()
 	Host::RunOnCPUThread([slot = GetCurrentSlot()]() {
 		Error error;
 		if (!VMManager::LoadStateFromSlot(slot, true, &error))
+#ifdef __SWITCH2__
+			SaveState_ReportLoadErrorOSD(error.GetDescription(), slot, true);
+#else
 			FullscreenUI::ReportStateLoadError(error.GetDescription(), slot, true);
+#endif
 	});
 	Close();
 }
@@ -2074,7 +2085,11 @@ void SaveStateSelectorUI::SaveCurrentSlot()
 {
 	Host::RunOnCPUThread([slot = GetCurrentSlot()]() {
 		VMManager::SaveStateToSlot(slot, true, [slot](const std::string& error) {
+#ifdef __SWITCH2__
+			SaveState_ReportSaveErrorOSD(error, slot);
+#else
 			FullscreenUI::ReportStateSaveError(error, slot);
+#endif
 		});
 	});
 	Close();

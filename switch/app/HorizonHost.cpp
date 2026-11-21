@@ -15,6 +15,9 @@
 #include "pcsx2/Horizon/HorizonProfiler.h"
 #include "pcsx2/GS/GS.h"
 #include "pcsx2/Host.h"
+#ifdef __SWITCH2__
+#include "pcsx2/ImGui/SwitchQuickMenu.h"
+#endif
 #include "pcsx2/ImGui/FullscreenUI.h"
 #include "pcsx2/ImGui/ImGuiFullscreen.h"
 #include "pcsx2/ImGui/ImGuiManager.h"
@@ -318,6 +321,9 @@ void Host::OnVMStarted()
 
 void Host::OnVMDestroyed()
 {
+#ifdef __SWITCH2__
+	SwitchQuickMenu::OnVMStopped();
+#endif
 	HorizonProfiler::Shutdown();
 	INFO_LOG("Host: VM destroyed");
 	if (s_exit_when_vm_ends.load(std::memory_order_acquire))
@@ -530,7 +536,7 @@ bool Host::ShouldPreferHostFileSelector()
 void Host::OpenHostFileSelectorAsync(std::string_view title, bool select_directory, FileSelectorCallback callback,
 	FileSelectorFilters filters, std::string_view initial_directory)
 {
-	WARNING_LOG("The Horizon host file selector is unavailable; using the FullscreenUI browser instead");
+	WARNING_LOG("The Horizon host file selector is unavailable");
 	callback({});
 }
 

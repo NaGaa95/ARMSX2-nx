@@ -8,9 +8,13 @@
 #include "IconsFontAwesome.h"
 #include "ImGui/FullscreenUI.h"
 #include "ImGui/ImGuiOverlays.h"
+#ifdef __SWITCH2__
+#include "ImGui/SwitchQuickMenu.h"
+#endif
 #include "Input/InputManager.h"
 #include "IopThread/IopThreadVm.h"
 #include "Recording/InputRecording.h"
+#include "SaveState.h"
 #include "SPU2/spu2.h"
 #include "VMManager.h"
 #include "SIO/Memcard/MemoryCardFile.h"
@@ -114,14 +118,22 @@ static void HotkeyLoadStateSlot(s32 slot)
 
 		Error error;
 		if (!VMManager::LoadStateFromSlot(slot, false, &error))
+#ifdef __SWITCH2__
+			SaveState_ReportLoadErrorOSD(error.GetDescription(), slot, false);
+#else
 			FullscreenUI::ReportStateLoadError(error.GetDescription(), slot, false);
+#endif
 	});
 }
 
 static void HotkeySaveStateSlot(s32 slot)
 {
 	VMManager::SaveStateToSlot(slot, true, [slot](const std::string& error) {
+#ifdef __SWITCH2__
+		SaveState_ReportSaveErrorOSD(error, slot);
+#else
 		FullscreenUI::ReportStateSaveError(error, slot);
+#endif
 	});
 }
 
@@ -164,13 +176,18 @@ DEFINE_HOTKEY("ToggleFullscreen", TRANSLATE_NOOP("Hotkeys", "Navigation"), TRANS
 DEFINE_HOTKEY("OpenPauseMenu", TRANSLATE_NOOP("Hotkeys", "Navigation"), TRANSLATE_NOOP("Hotkeys", "Open Pause Menu"),
 	[](s32 pressed) {
 		if (!pressed && VMManager::HasValidVM() && CanPause())
+#ifdef __SWITCH2__
+			SwitchQuickMenu::Toggle();
+#else
 			FullscreenUI::OpenPauseMenu();
+#endif
 	})
 DEFINE_HOTKEY("QuitApplication", TRANSLATE_NOOP("Hotkeys", "Navigation"), TRANSLATE_NOOP("Hotkeys", "Quit Application"),
 	[](s32 pressed) {
 		if (!pressed)
 			Host::RequestExitApplication(true);
 	})
+#ifndef __SWITCH2__
 DEFINE_HOTKEY("OpenAchievementsList", TRANSLATE_NOOP("Hotkeys", "Navigation"),
 	TRANSLATE_NOOP("Hotkeys", "Open Achievements List"), [](s32 pressed) {
 		if (!pressed && CanPause())
@@ -181,6 +198,7 @@ DEFINE_HOTKEY("OpenLeaderboardsList", TRANSLATE_NOOP("Hotkeys", "Navigation"),
 		if (!pressed && CanPause())
 			FullscreenUI::OpenLeaderboardsWindow();
 	})
+#endif
 DEFINE_HOTKEY(
 	"TogglePause", TRANSLATE_NOOP("Hotkeys", "Speed"), TRANSLATE_NOOP("Hotkeys", "Toggle Pause"), [](s32 pressed) {
 		if (!pressed && VMManager::HasValidVM() && CanPause())

@@ -9,7 +9,9 @@
 #include "GS/GSDumpBundle.h"
 #include "GS/GSPerfMon.h"
 #include "GS/Renderers/Common/GSDevice.h"
+#ifndef __SWITCH2__
 #include "ImGui/FullscreenUIShot.h"
+#endif
 #include "MTGS.h"
 #include "PerformanceMetrics.h"
 #include "SaveState.h"
@@ -237,12 +239,14 @@ namespace PINEServer
 		MsgGSDump = 0x14, /**< Records a GS dump of the next N frames. */
 		MsgGetEffectiveSetting = 0x15, /**< Reads what a setting is actually running as. */
 
+#ifndef __SWITCH2__
 		// Big Picture from outside, for scripted clients with no display (see ImGui/FullscreenUIShot.h).
 		// All work with no VM running. Each replies [u32 size][JSON, NUL-terminated]:
 		// {"ok":true,...} or {"ok":false,"error":"..."}; a malformed request fails the command.
 		MsgUIScreenshot = 0x16, /**< [u32 path_len][path .png][u32 settle_frames] Draws that many frames, writes the next; needs --headless. */
 		MsgUIOpenPage = 0x17, /**< [u32 name_len][name] Opens a Big Picture page, e.g. "settings:graphics". */
 		MsgUIWaitFrames = 0x18, /**< [u32 frames][u32 timeout_ms] Waits for that many presents (0 ms = 30 s). */
+#endif
 
 		// Pad input (SIO/Pad/PadScript.h): states take effect at a vsync, counted in emulated frames. Each replies
 		// [u32 size][JSON, NUL-terminated] with "ok" and, when it is false, an "error". A truncated request fails
@@ -255,9 +259,11 @@ namespace PINEServer
 		MsgUnimplemented = 0xFF /**< Unimplemented IPC message. */
 	};
 
+#ifndef __SWITCH2__
 	static_assert(MsgUIScreenshot == FullscreenUIShot::OpScreenshot && MsgUIOpenPage == FullscreenUIShot::OpOpenPage &&
 					  MsgUIWaitFrames == FullscreenUIShot::OpWaitFrames,
 		"PINE opcodes and FullscreenUIShot.h disagree");
+#endif
 
 	/**
 	 * Emulator status enum.
@@ -1316,6 +1322,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				Host::RunOnCPUThread([]() { VMManager::FrameAdvance(1); });
 				break;
 			}
+#ifndef __SWITCH2__
 			case MsgUIScreenshot:
 			case MsgUIOpenPage:
 			case MsgUIWaitFrames:
@@ -1335,6 +1342,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				ret_cnt += size;
 				break;
 			}
+#endif
 			case MsgPadSet:
 			{
 				std::string text;

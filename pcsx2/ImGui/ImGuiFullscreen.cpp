@@ -721,7 +721,17 @@ void ImGuiFullscreen::EndLayout()
 	DrawMessageDialog();
 
 	DrawFullscreenFooter();
+	RenderNotifications();
+	PopResetLayout();
 
+	s_fullscreen_footer_text.clear();
+
+	s_rendered_menu_item_border = false;
+	s_had_hovered_menu_item = std::exchange(s_has_hovered_menu_item, false);
+}
+
+void ImGuiFullscreen::RenderNotifications()
+{
 	const float notification_margin = LayoutScale(10.0f);
 	const float spacing = LayoutScale(10.0f);
 	const float notification_vertical_pos = GetNotificationVerticalPosition();
@@ -740,13 +750,6 @@ void ImGuiFullscreen::EndLayout()
 	DrawProgressDialogs(position, spacing);
 	DrawNotifications(position, spacing);
 	DrawToast();
-
-	PopResetLayout();
-
-	s_fullscreen_footer_text.clear();
-
-	s_rendered_menu_item_border = false;
-	s_had_hovered_menu_item = std::exchange(s_has_hovered_menu_item, false);
 }
 
 void ImGuiFullscreen::PushResetLayout()
@@ -976,7 +979,9 @@ void ImGuiFullscreen::ReportGamepadLayout(InputLayout layout)
 		return;
 
 	s_gamepad_layout = layout;
+#ifndef __SWITCH2__
 	FullscreenUI::GamepadLayoutChanged();
+#endif
 }
 
 InputLayout ImGuiFullscreen::GetGamepadLayout()
