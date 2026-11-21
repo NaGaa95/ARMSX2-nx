@@ -34,6 +34,10 @@
 #include <thread>
 #include <vector>
 
+#ifdef __SWITCH2__
+#include "nx2_platform.h"
+#endif
+
 namespace
 {
 	std::mutex s_cpu_queue_mutex;
@@ -73,7 +77,13 @@ void HorizonHost::RequestExit()
 
 		const VMState state = VMManager::GetState();
 		if (state == VMState::Running || state == VMState::Paused)
+		{
+#ifdef __SWITCH2__
+			// Closing from the HOME menu keeps a resume state too, when the setting asks for one.
+			s_save_resume_state.store(EmuConfig.SaveStateOnShutdown, std::memory_order_release);
+#endif
 			VMManager::SetState(VMState::Stopping);
+		}
 	});
 }
 
@@ -97,6 +107,13 @@ void HorizonHost::RequestVMShutdown(bool save_resume_state)
 bool HorizonHost::TakeResumeSaveRequest()
 {
 	return s_save_resume_state.exchange(false, std::memory_order_acq_rel);
+}
+
+static std::atomic_bool s_exit_when_vm_ends{false};
+
+void HorizonHost::SetExitWhenVMEnds(bool enabled)
+{
+	s_exit_when_vm_ends.store(enabled, std::memory_order_release);
 }
 
 std::optional<std::string> HorizonHost::ShowSoftwareKeyboard(const SoftwareKeyboardParameters& params)
@@ -164,6 +181,25 @@ void Host::ReleaseRenderWindow()
 
 void Host::BeginPresentFrame()
 {
+#ifdef __SWITCH2__
+	// Docking or a TV mode change resized the default window, or changed its refresh rate: the renderer follows, and
+	// so does the speed limiter when it syncs to the host's refresh rate.
+	static int s_last_refresh_rate = 0;
+	const bool resized = nx2DisplayUpdate();
+	const int refresh_rate = nx2DisplayRefreshRate();
+	if (resized || refresh_rate != s_last_refresh_rate)
+	{
+		const bool rate_changed = s_last_refresh_rate != 0 && refresh_rate != s_last_refresh_rate;
+		s_last_refresh_rate = refresh_rate;
+		u32 width = 0, height = 0;
+		nx2DisplaySize(&width, &height);
+		INFO_LOG("Switch 2: display {}x{} at {} Hz", width, height, refresh_rate);
+		GSResizeDisplayWindow(width, height, 1.0f);
+		nx2DisplayReapply();
+		if (rate_changed)
+			Host::RunOnCPUThread([]() { VMManager::UpdateTargetSpeed(); });
+	}
+#endif
 }
 
 std::optional<WindowInfo> Host::GetTopLevelWindowInfo()
@@ -284,6 +320,8 @@ void Host::OnVMDestroyed()
 {
 	HorizonProfiler::Shutdown();
 	INFO_LOG("Host: VM destroyed");
+	if (s_exit_when_vm_ends.load(std::memory_order_acquire))
+		HorizonHost::RequestExit();
 }
 
 void Host::OnVMPaused()
@@ -459,7 +497,11 @@ void Host::OnAchievementsLoginSuccess(const char* username, u32 points, u32 sc_p
 
 void Host::OnAchievementsLoginRequested(Achievements::LoginRequestReason reason)
 {
+#ifdef __SWITCH2__
+	WARNING_LOG("RetroAchievements: sign in again from the launcher");
+#else
 	WARNING_LOG("RetroAchievements login is unavailable until Horizon network and keyboard support is implemented");
+#endif
 }
 
 void Host::OnAchievementsHardcoreModeChanged(bool enabled)

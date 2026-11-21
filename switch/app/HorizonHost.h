@@ -19,6 +19,9 @@ namespace HorizonHost
 	void RequestVMShutdown(bool save_resume_state);
 	bool TakeResumeSaveRequest();
 
+	// Started by the launcher for one game: the program ends (and the launcher runs again) when that game's VM ends.
+	void SetExitWhenVMEnds(bool enabled);
+
 	struct SoftwareKeyboardParameters
 	{
 		std::string guide_text;
