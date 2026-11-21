@@ -109,6 +109,9 @@ private:
 
 	bool CreateDeviceObjects();
 	void DestroyDeviceObjects();
+	// The framebuffers and the swapchain over them, at m_present_width x m_present_height.
+	bool CreateSwapchain();
+	void DestroySwapchain();
 	bool LoadShaders();
 	bool SetupSamplers();
 	void BeginFrameIfNeeded();
@@ -154,6 +157,32 @@ private:
 	}
 	// Issue a deko3d barrier and stop image generation if the image cache was marked
 	void IssueBarrier(DkBarrier mode, u32 invalidate_flags);
+	// drako3d runs copies (uploads, image copies, blits, readbacks) on Ampere's copy engine, concurrently with the 3D
+	// engine: only a full barrier orders the two, in both directions. No-ops on the Switch, where copies stay in order.
+	__fi void BeforeCopyEngine() // before every copy, blit, upload or readback
+	{
+#ifdef __SWITCH2__
+		if (m_3d_since_full_barrier)
+			IssueBarrier(DkBarrier_Full, 0);
+		m_copy_engine_busy = true;
+#endif
+	}
+	__fi void WaitForCopyEngine() // before every draw, clear or dispatch
+	{
+#ifdef __SWITCH2__
+		if (m_copy_engine_busy)
+			IssueBarrier(DkBarrier_Full, DkInvalidateFlags_Image);
+		m_3d_since_full_barrier = true;
+#endif
+	}
+#ifdef __SWITCH2__
+	bool m_copy_engine_busy = false;
+	// Kept across frames: the previous frame may still be running.
+	bool m_3d_since_full_barrier = true;
+	static constexpr DkBarrier READBACK_BARRIER = DkBarrier_Full;
+#else
+	static constexpr DkBarrier READBACK_BARRIER = DkBarrier_Primitives;
+#endif
 	// GPU-side timestamp report into the per-frame timing slot
 	void WriteGPUTimestamp(u32 frame_index, u32 which);
 	// Harvest the start/end timestamps of a finished frame into m_accumulated_gpu_time.

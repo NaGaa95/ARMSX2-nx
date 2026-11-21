@@ -245,7 +245,7 @@ GSDownloadTextureDK::~GSDownloadTextureDK()
 {
 	if (m_memblock)
 		m_device->ReleaseMemBlock(m_memblock, m_block_size,
-			DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuUncached);
+			DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuUncached);
 }
 
 std::unique_ptr<GSDownloadTextureDK> GSDownloadTextureDK::Create(GSDeviceDK* device, u32 width, u32 height,
@@ -254,9 +254,9 @@ std::unique_ptr<GSDownloadTextureDK> GSDownloadTextureDK::Create(GSDeviceDK* dev
 	const u32 buffer_size = GetBufferSize(width, height, format, 1);
 	const u32 block_size = AlignUp(buffer_size, DK_MEMBLOCK_ALIGNMENT);
 
-	// CPU reads immediately after the copy
+	// Read through the CPU cache (uncached reads are slow); the copied range is invalidated once the copy is done.
 	DkMemBlock memblock = device->AcquireMemBlock(block_size,
-		DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuUncached);
+		DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuUncached);
 	if (!memblock)
 	{
 		Console.Error("DK3D: failed to allocate %u byte readback buffer.", buffer_size);
@@ -286,7 +286,24 @@ void GSDownloadTextureDK::DoCopyFromTexture(
 	// Records the copy into the frame command buffer
 	m_device->ReadbackTexture(dktex, src, src_level, m_memblock, copy_offset, m_current_pitch);
 	m_copy_submission = m_device->GetRecordingSubmission();
+	if (!m_needs_flush)
+	{
+		m_copied_begin = copy_offset;
+		m_copied_end = copy_offset + copy_size;
+	}
+	else
+	{
+		m_copied_begin = std::min(m_copied_begin, copy_offset);
+		m_copied_end = std::max(m_copied_end, copy_offset + copy_size);
+	}
 	m_needs_flush = true;
+}
+
+void GSDownloadTextureDK::InvalidateCopiedRange()
+{
+	if (m_copied_end > m_copied_begin)
+		dkMemBlockFlushCpuCache(m_memblock, m_copied_begin, m_copied_end - m_copied_begin);
+	m_copied_begin = m_copied_end = 0;
 }
 
 bool GSDownloadTextureDK::Map(const GSVector4i& read_rc)
@@ -306,12 +323,16 @@ void GSDownloadTextureDK::Flush()
 	m_needs_flush = false;
 	// Block once for the queued copy instead of per copy.
 	m_device->WaitForSubmission(m_copy_submission);
+	InvalidateCopiedRange();
 }
 
 bool GSDownloadTextureDK::Poll()
 {
 	if (m_needs_flush && m_device->IsSubmissionComplete(m_copy_submission))
+	{
 		m_needs_flush = false;
+		InvalidateCopiedRange();
+	}
 	return !m_needs_flush;
 }
 

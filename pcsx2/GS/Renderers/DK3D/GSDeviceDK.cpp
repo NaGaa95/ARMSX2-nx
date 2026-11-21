@@ -15,6 +15,10 @@
 #include "common/Horizon/Horizon.h" // nwindowGetDefault()
 #include "common/Timer.h"
 
+#ifdef __SWITCH2__
+#include "nx2_platform.h"
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
@@ -154,7 +158,7 @@ namespace
 	{
 		const bool fetch = (expand == GSHWDrawConfig::VSExpand::None);
 		dkCmdBufBindVtxAttribState(cmdbuf, kTfxAttribs, fetch ? 7 : 0);
-		dkCmdBufBindVtxBufferState(cmdbuf, &kTfxBufferState, 1);
+		dkCmdBufBindVtxBufferState(cmdbuf, &kTfxBufferState, fetch ? 1 : 0);
 	}
 
 	constexpr DkPrimitive GetTfxPrimitive(GSHWDrawConfig::Topology topology)
@@ -230,14 +234,27 @@ RenderAPI GSDeviceDK::GetRenderAPI() const
 
 bool GSDeviceDK::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 {
-	m_name = "deko3d";
 	m_max_texture_size = 16384;
+	// The swapchain's pacing reads them before GSDevice::Create sets them.
+	m_vsync_mode = vsync_mode;
+	m_allow_present_throttle = allow_present_throttle;
 
 	m_window_info.type = WindowInfo::Type::Android;
+#ifdef __SWITCH2__
+	// The window nx2DisplayInit set up: 1920x1080 handheld, the TV's resolution docked.
+	m_name = "drako3d";
+	u32 display_width = 1920, display_height = 1080;
+	nx2DisplaySize(&display_width, &display_height);
+	m_window_info.surface_width = display_width;
+	m_window_info.surface_height = display_height;
+	m_window_info.surface_refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
+#else
+	m_name = "deko3d";
 	m_window_info.surface_width = 1280;
 	m_window_info.surface_height = 720;
-	m_window_info.surface_scale = 1.0f;
 	m_window_info.surface_refresh_rate = 60.0f;
+#endif
+	m_window_info.surface_scale = 1.0f;
 
 #ifdef __SWITCH__
 	m_present_width = static_cast<int>(m_window_info.surface_width);
@@ -263,49 +280,22 @@ bool GSDeviceDK::CreateDeviceObjects()
 		Console.Error("DK3D deko3d error: context='%s' result=%d message='%s'", context ? context : "?",
 			static_cast<int>(result), message ? message : "?");
 	};
+#ifdef __SWITCH2__
+	// The launcher, another program of this process, presented with the GPU before: drako3d opens it on a new GSV
+	// root once Mesa's device is retired and the VI2 layer released.
+	if (!nx2GpuReleaseForDrako3d())
+		Console.Warning("DK3D: the VI2 layer could not be released before drako3d opened the GPU");
+#endif
 	Horizon::Breadcrumb("DK3D: dkDeviceCreate");
 	m_device = dkDeviceCreate(&device_maker);
 	if (!m_device)
 		return false;
 	Horizon::Breadcrumb("DK3D: device created");
 
-	DkImageLayoutMaker layout_maker;
-	dkImageLayoutMakerDefaults(&layout_maker, m_device);
-	layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_HwCompression;
-	layout_maker.format = DkImageFormat_RGBA8_Unorm;
-	layout_maker.dimensions[0] = m_present_width;
-	layout_maker.dimensions[1] = m_present_height;
-
-	DkImageLayout framebuffer_layout;
-	dkImageLayoutInitialize(&framebuffer_layout, &layout_maker);
-
-	u32 fb_size = dkImageLayoutGetSize(&framebuffer_layout);
-	const u32 fb_align = dkImageLayoutGetAlignment(&framebuffer_layout);
-	fb_size = (fb_size + fb_align - 1) & ~(fb_align - 1);
-	m_framebuffer_size = fb_size;
+	if (!CreateSwapchain())
+		return false;
 
 	DkMemBlockMaker memblock_maker;
-	dkMemBlockMakerDefaults(&memblock_maker, m_device, NUM_FRAMEBUFFERS * fb_size);
-	memblock_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
-	m_fb_memblock = dkMemBlockCreate(&memblock_maker);
-	if (!m_fb_memblock)
-		return false;
-
-	// Initialise the framebuffer images and build a swapchain from them.
-	const DkImage* swapchain_images[NUM_FRAMEBUFFERS];
-	for (unsigned i = 0; i < NUM_FRAMEBUFFERS; i++)
-	{
-		dkImageInitialize(&m_framebuffers[i], &framebuffer_layout, m_fb_memblock, i * fb_size);
-		swapchain_images[i] = &m_framebuffers[i];
-	}
-
-	DkSwapchainMaker swapchain_maker;
-	dkSwapchainMakerDefaults(&swapchain_maker, m_device, nwindowGetDefault(), swapchain_images, NUM_FRAMEBUFFERS);
-	Horizon::Breadcrumb("DK3D: dkSwapchainCreate");
-	m_swapchain = dkSwapchainCreate(&swapchain_maker);
-	if (!m_swapchain)
-		return false;
-	Horizon::Breadcrumb("DK3D: swapchain created");
 
 	// Successive frames overlap instead of serialising through dkQueueWaitIdle.
 	DkCmdBufMaker cmdbuf_maker;
@@ -471,6 +461,10 @@ void GSDeviceDK::IssueBarrier(DkBarrier mode, u32 invalidate_flags)
 	dkCmdBufBarrier(m_cmdbuf, mode, invalidate_flags);
 	if (invalidate_flags & DkInvalidateFlags_Image)
 		m_gpu_write_gen++;
+#ifdef __SWITCH2__
+	if (mode == DkBarrier_Full)
+		m_copy_engine_busy = m_3d_since_full_barrier = false;
+#endif
 }
 
 void GSDeviceDK::WriteGPUTimestamp(u32 frame_index, u32 which)
@@ -543,6 +537,9 @@ void GSDeviceDK::BeginFrameIfNeeded()
 	m_next_image_slot = 0;
 	// Refresh command buffer
 	InvalidateHWStateCache();
+	// The descriptor slots restart in a block the GPU read three frames ago, and binding a descriptor set does not
+	// invalidate the texture header and sampler caches.
+	IssueBarrier(DkBarrier_None, DkInvalidateFlags_Descriptors);
 
 	m_frame_active = true;
 
@@ -684,6 +681,7 @@ void GSDeviceDK::CommitClear(GSTextureDK* tex)
 	if (!tex || tex->GetState() != GSTexture::State::Cleared)
 		return;
 
+	WaitForCopyEngine();
 	DkImageView view;
 	tex->GetImageView(&view);
 	if (tex->IsDepth())
@@ -722,6 +720,7 @@ void GSDeviceDK::DoStretchRectImpl(GSTextureDK* sTex, const GSVector4& sRect, GS
 		return;
 
 	BeginFrameIfNeeded();
+	WaitForCopyEngine();
 	// This pass binds convert shaders/blend/vertex layout
 	InvalidateHWStateCache();
 
@@ -821,6 +820,7 @@ void GSDeviceDK::DoStretchRectImpl(GSTextureDK* sTex, const GSVector4& sRect, GS
 	dkCmdBufBindVtxAttribState(m_cmdbuf, attribs, 2);
 	dkCmdBufBindVtxBufferState(m_cmdbuf, &buffer_state, 1);
 	dkCmdBufBindVtxBuffer(m_cmdbuf, 0, vertex_addr, sizeof(vertices));
+	WaitForCopyEngine();
 	dkCmdBufDraw(m_cmdbuf, DkPrimitive_TriangleStrip, 4, 1, 0, 0);
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
 
@@ -859,7 +859,7 @@ bool GSDeviceDK::LoadShaders()
 
 		const u32 offset = code_offset;
 		code_offset += (static_cast<u32>(size) + DK_SHADER_CODE_ALIGNMENT - 1) & ~(DK_SHADER_CODE_ALIGNMENT - 1);
-		if (code_offset > CODE_MEMSIZE)
+		if (code_offset > CODE_MEMSIZE - DK_SHADER_CODE_UNUSABLE_SIZE)
 		{
 			std::fclose(f);
 			Console.Error("DK3D: shader code memblock too small for %s", path);
@@ -956,6 +956,73 @@ bool GSDeviceDK::LoadShaders()
 	return m_convert_shaders_ok;
 }
 
+bool GSDeviceDK::CreateSwapchain()
+{
+	DkImageLayoutMaker layout_maker;
+	dkImageLayoutMakerDefaults(&layout_maker, m_device);
+#ifdef __SWITCH2__
+	// (drako3d: no hardware compression on swapchain images)
+	layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent;
+#else
+	layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_HwCompression;
+#endif
+	layout_maker.format = DkImageFormat_RGBA8_Unorm;
+	layout_maker.dimensions[0] = m_present_width;
+	layout_maker.dimensions[1] = m_present_height;
+
+	DkImageLayout framebuffer_layout;
+	dkImageLayoutInitialize(&framebuffer_layout, &layout_maker);
+
+	u32 fb_size = dkImageLayoutGetSize(&framebuffer_layout);
+	const u32 fb_align = dkImageLayoutGetAlignment(&framebuffer_layout);
+	fb_size = (fb_size + fb_align - 1) & ~(fb_align - 1);
+	m_framebuffer_size = fb_size;
+
+	DkMemBlockMaker memblock_maker;
+	dkMemBlockMakerDefaults(&memblock_maker, m_device, NUM_FRAMEBUFFERS * fb_size);
+	memblock_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
+	m_fb_memblock = dkMemBlockCreate(&memblock_maker);
+	if (!m_fb_memblock)
+		return false;
+
+	// Initialise the framebuffer images and build a swapchain from them.
+	const DkImage* swapchain_images[NUM_FRAMEBUFFERS];
+	for (unsigned i = 0; i < NUM_FRAMEBUFFERS; i++)
+	{
+		dkImageInitialize(&m_framebuffers[i], &framebuffer_layout, m_fb_memblock, i * fb_size);
+		swapchain_images[i] = &m_framebuffers[i];
+	}
+
+	DkSwapchainMaker swapchain_maker;
+	dkSwapchainMakerDefaults(&swapchain_maker, m_device, nwindowGetDefault(), swapchain_images, NUM_FRAMEBUFFERS);
+	m_swapchain = dkSwapchainCreate(&swapchain_maker);
+	if (!m_swapchain)
+	{
+		dkMemBlockDestroy(m_fb_memblock);
+		m_fb_memblock = nullptr;
+		return false;
+	}
+#ifdef __SWITCH2__
+	// Creating a swapchain resets the window's present interval: reapply nx2's pacing.
+	nx2DisplayApply(m_vsync_mode == GSVSyncMode::Disabled ? 0 : 1);
+#endif
+	return true;
+}
+
+void GSDeviceDK::DestroySwapchain()
+{
+	if (m_swapchain)
+	{
+		dkSwapchainDestroy(m_swapchain);
+		m_swapchain = nullptr;
+	}
+	if (m_fb_memblock)
+	{
+		dkMemBlockDestroy(m_fb_memblock);
+		m_fb_memblock = nullptr;
+	}
+}
+
 void GSDeviceDK::DestroyDeviceObjects()
 {
 	if (m_queue)
@@ -1044,16 +1111,7 @@ void GSDeviceDK::DestroyDeviceObjects()
 		m_code_memblock = nullptr;
 		m_convert_shaders_ok = false;
 	}
-	if (m_swapchain)
-	{
-		dkSwapchainDestroy(m_swapchain);
-		m_swapchain = nullptr;
-	}
-	if (m_fb_memblock)
-	{
-		dkMemBlockDestroy(m_fb_memblock);
-		m_fb_memblock = nullptr;
-	}
+	DestroySwapchain();
 	DrainMemBlockPool();
 	if (m_device)
 	{
@@ -1093,7 +1151,8 @@ void GSDeviceDK::ReleaseMemBlock(DkMemBlock block, u32 size, u32 flags)
 		ctx.retired_memblocks.push_back({block, size, flags});
 	else
 		PoolMemBlock({block, size, flags});
-	InvalidateHWStateCache();
+	// The bound textures are cached by pointer, which a new texture can reuse.
+	m_hw_tex_valid = false;
 }
 
 void GSDeviceDK::PoolMemBlock(const PooledMemBlock& block)
@@ -1137,6 +1196,24 @@ bool GSDeviceDK::UpdateWindow()
 
 void GSDeviceDK::ResizeWindow(u32 new_window_width, u32 new_window_height, float new_window_scale)
 {
+#ifdef __SWITCH2__
+	// Docking or a TV mode change resized the window: new framebuffers.
+	m_window_info.surface_refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
+	if (!m_device || new_window_width == 0 || new_window_height == 0 ||
+		(m_swapchain && static_cast<int>(new_window_width) == m_present_width &&
+			static_cast<int>(new_window_height) == m_present_height))
+		return;
+
+	dkQueueWaitIdle(m_queue);
+	DestroySwapchain();
+	m_present_width = static_cast<int>(new_window_width);
+	m_present_height = static_cast<int>(new_window_height);
+	m_window_info.surface_width = new_window_width;
+	m_window_info.surface_height = new_window_height;
+	m_window_info.surface_scale = new_window_scale;
+	if (!CreateSwapchain())
+		Console.Error("DK3D: framebuffers for %ux%u could not be created", new_window_width, new_window_height);
+#endif
 }
 
 bool GSDeviceDK::SupportsExclusiveFullscreen() const
@@ -1147,6 +1224,11 @@ bool GSDeviceDK::SupportsExclusiveFullscreen() const
 GSDevice::PresentResult GSDeviceDK::DoBeginPresent(bool frame_skip)
 {
 #ifdef __SWITCH__
+#ifdef __SWITCH2__
+	// A swapchain that could not be made at a resize: try again once per present.
+	if (!m_swapchain && m_device && !frame_skip)
+		CreateSwapchain();
+#endif
 	if (frame_skip || !m_swapchain)
 	{
 		SubmitFrame();
@@ -1155,6 +1237,7 @@ GSDevice::PresentResult GSDeviceDK::DoBeginPresent(bool frame_skip)
 
 	// DoMerge may already have opened the frame? Otherwise we start here.
 	BeginFrameIfNeeded();
+	WaitForCopyEngine();
 
 	// The release libdeko3d svcBreaks on any acquire failure without calling cbDebug. Record
 	// whether the queue had already faulted (GPU fault/timeout) as opposed to VI refusing the
@@ -1297,6 +1380,7 @@ void GSDeviceDK::RenderImGui()
 			const DkResHandle handle = dkMakeTextureHandle(slot, SAMPLER_LINEAR);
 			dkCmdBufBindTextures(m_cmdbuf, DkStage_Fragment, 0, &handle, 1);
 
+			WaitForCopyEngine();
 			dkCmdBufDrawIndexed(m_cmdbuf, DkPrimitive_Triangles, pcmd->ElemCount, 1, pcmd->IdxOffset, pcmd->VtxOffset,
 				0);
 		}
@@ -1323,9 +1407,14 @@ void GSDeviceDK::SubmitFrame()
 	FrameContext& ctx = m_frames[m_frame_index];
 	if (ctx.timestamp_written)
 		WriteGPUTimestamp(m_frame_index, 1);
+#ifdef __SWITCH2__
+	// The fence must also cover copies still running on the copy engine.
+	if (m_readback_pending || m_copy_engine_busy)
+#else
 	if (m_readback_pending)
+#endif
 	{
-		IssueBarrier(DkBarrier_Primitives, DkInvalidateFlags_L2Cache);
+		IssueBarrier(READBACK_BARRIER, m_readback_pending ? DkInvalidateFlags_L2Cache : 0);
 		g_perfmon.Put(GSPerfMon::Barriers, 1);
 		m_readback_pending = false;
 	}
@@ -1347,11 +1436,19 @@ void GSDeviceDK::SetVSyncMode(GSVSyncMode mode, bool allow_present_throttle)
 {
 	m_vsync_mode = mode;
 	m_allow_present_throttle = allow_present_throttle;
+#ifdef __SWITCH2__
+	// drako3d presents at the default window's interval; at 120 Hz nx2 paces with VRR instead.
+	nx2DisplayApply(mode == GSVSyncMode::Disabled ? 0 : 1);
+#endif
 }
 
 std::string GSDeviceDK::GetDriverInfo() const
 {
+#ifdef __SWITCH2__
+	return "drako3d";
+#else
 	return "deko3d";
+#endif
 }
 
 bool GSDeviceDK::SetGPUTimingEnabled(bool enabled)
@@ -1403,7 +1500,12 @@ std::unique_ptr<GSDownloadTexture> GSDeviceDK::CreateDownloadTexture(u32 width, 
 void GSDeviceDK::ReadbackTexture(GSTextureDK* src, const GSVector4i& rect, u32 src_level,
 	DkMemBlock dst_block, u32 dst_offset, u32 dst_pitch)
 {
-	if (!src || rect.rempty())
+	if (!src || rect.rempty() || rect.left < 0 || rect.top < 0)
+		return;
+	// The copy engine reads exactly this rectangle: keep it inside the level.
+	const int right = std::min(rect.right, std::max(1, src->GetWidth() >> src_level));
+	const int bottom = std::min(rect.bottom, std::max(1, src->GetHeight() >> src_level));
+	if (right <= rect.left || bottom <= rect.top)
 		return;
 
 	// Preserve current frame work
@@ -1416,9 +1518,10 @@ void GSDeviceDK::ReadbackTexture(GSTextureDK* src, const GSVector4i& rect, u32 s
 	src_view.mipLevelOffset = static_cast<uint8_t>(src_level);
 	src_view.mipLevelCount = 1;
 	const DkImageRect src_rect = {static_cast<u32>(rect.left), static_cast<u32>(rect.top), 0,
-		static_cast<u32>(rect.width()), static_cast<u32>(rect.height()), 1};
+		static_cast<u32>(right - rect.left), static_cast<u32>(bottom - rect.top), 1};
 
 	const DkCopyBuf dst = {dkMemBlockGetGpuAddr(dst_block) + dst_offset, dst_pitch, 0};
+	BeforeCopyEngine();
 	dkCmdBufCopyImageToBuffer(m_cmdbuf, &src_view, &src_rect, &dst, 0);
 
 	// Copy now rides in the frame command buffer
@@ -1434,7 +1537,7 @@ void GSDeviceDK::FlushReadback()
 	BeginFrameIfNeeded();
 
 	// Finish this list so EndPresent won't resubmit it, then wait only on the copy, not the entire frame
-	IssueBarrier(DkBarrier_Primitives, DkInvalidateFlags_L2Cache);
+	IssueBarrier(READBACK_BARRIER, DkInvalidateFlags_L2Cache);
 	g_perfmon.Put(GSPerfMon::Barriers, 1);
 	dkQueueSubmitCommands(m_queue, dkCmdBufFinishList(m_cmdbuf));
 	dkQueueSignalFence(m_queue, &m_readback_fence, false);
@@ -1445,6 +1548,8 @@ void GSDeviceDK::FlushReadback()
 	m_completed_serial = m_submitted_serial;
 	PerformanceMetrics::AccumulateGSGpuWait(
 		static_cast<u64>(Common::Timer::ConvertValueToNanoseconds(Common::Timer::GetCurrentValue() - wait_start)));
+	// The submitted part may have cached the headers of the descriptor slots written next.
+	IssueBarrier(DkBarrier_None, DkInvalidateFlags_Descriptors);
 }
 
 bool GSDeviceDK::IsSubmissionComplete(u64 serial)
@@ -1511,6 +1616,7 @@ bool GSDeviceDK::UploadToImage(GSTextureDK* dst_tex, const DkImageView& view, co
 		std::memcpy(dst + y * upload_pitch, src + y * src_pitch, copy_bytes);
 
 	const DkCopyBuf copy_src = {src_addr, 0, 0};
+	BeforeCopyEngine();
 	dkCmdBufCopyBufferToImage(m_cmdbuf, &copy_src, &view, &rect, 0);
 	// Don't drain the pipeline per upload
 	if (dst_tex)
@@ -1528,6 +1634,7 @@ void GSDeviceDK::GenerateImageMipmaps(GSTextureDK* tex, DkImage* image, int widt
 	BeginFrameIfNeeded();
 	CommitClear(tex);
 
+	BeforeCopyEngine();
 	for (int level = 1; level < levels; level++)
 	{
 		DkImageView src_view;
@@ -1561,6 +1668,15 @@ void GSDeviceDK::DoCopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& 
 	GSTextureDK* const src = static_cast<GSTextureDK*>(sTex);
 	GSTextureDK* const dst = static_cast<GSTextureDK*>(dTex);
 
+	// The copy engine reads and writes exactly this rectangle: keep it inside both images.
+	const GSVector4i sr = r.rintersect(GSVector4i(0, 0, src->GetWidth(), src->GetHeight()));
+	const u32 dx = destX + static_cast<u32>(sr.left - r.left);
+	const u32 dy = destY + static_cast<u32>(sr.top - r.top);
+	const int width = std::min(sr.width(), dst->GetWidth() - static_cast<int>(dx));
+	const int height = std::min(sr.height(), dst->GetHeight() - static_cast<int>(dy));
+	if (sr.rempty() || width <= 0 || height <= 0)
+		return;
+
 	g_perfmon.Put(GSPerfMon::TextureCopies, 1);
 
 	BeginFrameIfNeeded();
@@ -1574,9 +1690,10 @@ void GSDeviceDK::DoCopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& 
 	src->GetImageView(&src_view);
 	dst->GetImageView(&dst_view);
 
-	const DkImageRect src_rect = {static_cast<u32>(r.left), static_cast<u32>(r.top), 0, static_cast<u32>(r.width()),
-		static_cast<u32>(r.height()), 1};
-	const DkImageRect dst_rect = {destX, destY, 0, static_cast<u32>(r.width()), static_cast<u32>(r.height()), 1};
+	const DkImageRect src_rect = {static_cast<u32>(sr.left), static_cast<u32>(sr.top), 0, static_cast<u32>(width),
+		static_cast<u32>(height), 1};
+	const DkImageRect dst_rect = {dx, dy, 0, static_cast<u32>(width), static_cast<u32>(height), 1};
+	BeforeCopyEngine();
 	dkCmdBufCopyImage(m_cmdbuf, &src_view, &src_rect, &dst_view, &dst_rect, 0);
 
 	dst->SetState(GSTexture::State::Dirty);
@@ -1773,6 +1890,7 @@ void GSDeviceDK::DoRenderHW(GSHWDrawConfig& config)
 	GSTextureDK* const pal = static_cast<GSTextureDK*>(config.pal);
 
 	BeginFrameIfNeeded();
+	WaitForCopyEngine();
 
 	g_perfmon.Put(GSPerfMon::RenderPasses, 1);
 
@@ -2026,6 +2144,7 @@ void GSDeviceDK::DoRenderHW(GSHWDrawConfig& config)
 		mp_sel.blend_hw = config.blend_multi_pass.blend_hw;
 		mp_sel.dither = config.blend_multi_pass.dither;
 		bind_selector(mp_sel);
+		WaitForCopyEngine();
 		dkCmdBufDrawIndexed(m_cmdbuf, primitive, config.nindices, 1, 0, 0, 0);
 		g_perfmon.Put(GSPerfMon::DrawCalls, 1);
 	}
@@ -2068,6 +2187,7 @@ void GSDeviceDK::SetupDATE(GSTextureDK* rt, GSTextureDK* ds, SetDATM datm, const
 		return;
 
 	BeginFrameIfNeeded();
+	WaitForCopyEngine();
 	InvalidateHWStateCache();
 
 	g_perfmon.Put(GSPerfMon::RenderPasses, 1);
@@ -2163,6 +2283,7 @@ void GSDeviceDK::SetupDATE(GSTextureDK* rt, GSTextureDK* ds, SetDATM datm, const
 	dkCmdBufBindVtxAttribState(m_cmdbuf, attribs, 2);
 	dkCmdBufBindVtxBufferState(m_cmdbuf, &buffer_state, 1);
 	dkCmdBufBindVtxBuffer(m_cmdbuf, 0, vertex_addr, sizeof(vertices));
+	WaitForCopyEngine();
 	dkCmdBufDraw(m_cmdbuf, DkPrimitive_TriangleStrip, 4, 1, 0, 0);
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
 
@@ -2205,6 +2326,7 @@ GSTextureDK* GSDeviceDK::SetupPrimitiveTrackingDATE(GSHWDrawConfig& config)
 
 	// MIN-blend each primitive's id into the image
 	BeginFrameIfNeeded();
+	WaitForCopyEngine();
 	InvalidateHWStateCache();
 	g_perfmon.Put(GSPerfMon::RenderPasses, 1);
 
@@ -2297,6 +2419,7 @@ GSTextureDK* GSDeviceDK::SetupPrimitiveTrackingDATE(GSHWDrawConfig& config)
 
 	BindHWGeometry(config);
 	BindTfxVertexInput(m_cmdbuf, config.vs.expand);
+	WaitForCopyEngine();
 	dkCmdBufDrawIndexed(m_cmdbuf, GetTfxPrimitive(config.topology), config.nindices, 1, 0, 0, 0);
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
 
@@ -2323,6 +2446,7 @@ void GSDeviceDK::SendHWDraw(const GSHWDrawConfig& config, DkPrimitive primitive,
 			{
 				const u32 count = static_cast<u32>((*config.drawlist)[n]) * indices_per_prim;
 				IssueBarrier(DkBarrier_Tiles, DkInvalidateFlags_Image);
+				WaitForCopyEngine();
 				dkCmdBufDrawIndexed(m_cmdbuf, primitive, count, 1, p, 0, 0);
 				p += count;
 			}
@@ -2337,6 +2461,7 @@ void GSDeviceDK::SendHWDraw(const GSHWDrawConfig& config, DkPrimitive primitive,
 		for (u32 p = 0; p < config.nindices; p += indices_per_prim)
 		{
 			IssueBarrier(DkBarrier_Tiles, DkInvalidateFlags_Image);
+			WaitForCopyEngine();
 			dkCmdBufDrawIndexed(m_cmdbuf, primitive, indices_per_prim, 1, p, 0, 0);
 			prims++;
 		}
@@ -2352,6 +2477,7 @@ void GSDeviceDK::SendHWDraw(const GSHWDrawConfig& config, DkPrimitive primitive,
 		g_perfmon.Put(GSPerfMon::Barriers, 1);
 	}
 
+	WaitForCopyEngine();
 	dkCmdBufDrawIndexed(m_cmdbuf, primitive, config.nindices, 1, 0, 0, 0);
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
 }
@@ -2389,6 +2515,7 @@ void GSDeviceDK::DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex, 
 	GSTextureDK* const src1 = static_cast<GSTextureDK*>(sTex[1]); // blend background
 	GSTextureDK* const src2 = static_cast<GSTextureDK*>(sTex[2]); // EXTBUF feedback target
 	BeginFrameIfNeeded();
+	WaitForCopyEngine();
 
 	// A YUV-converted copy of the merge circuit is written back into sTex[2] so it becomes a texture for a later draw
 	const bool feedback_write_2 = PMODE.EN2 && src2 != nullptr && EXTBUF.FBIN == 1;
@@ -2535,6 +2662,7 @@ bool GSDeviceDK::DoCAS(GSTexture* sTex, GSTexture* dTex, bool sharpen_only,
 	GSTextureDK* const dTexDK = static_cast<GSTextureDK*>(dTex);
 
 	BeginFrameIfNeeded();
+	WaitForCopyEngine();
 	InvalidateHWStateCache();
 
 	// Make the source's prior writes visible
@@ -2573,6 +2701,7 @@ bool GSDeviceDK::DoCAS(GSTexture* sTex, GSTexture* dTex, bool sharpen_only,
 	static constexpr u32 threadGroupWorkRegionDim = 16;
 	const u32 dispatchX = (static_cast<u32>(dTexDK->GetWidth()) + (threadGroupWorkRegionDim - 1)) / threadGroupWorkRegionDim;
 	const u32 dispatchY = (static_cast<u32>(dTexDK->GetHeight()) + (threadGroupWorkRegionDim - 1)) / threadGroupWorkRegionDim;
+	WaitForCopyEngine();
 	dkCmdBufDispatchCompute(m_cmdbuf, dispatchX, dispatchY, 1);
 	g_perfmon.Put(GSPerfMon::DrawCalls, 1);
 

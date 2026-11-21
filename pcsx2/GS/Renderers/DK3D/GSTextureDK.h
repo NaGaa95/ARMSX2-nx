@@ -90,11 +90,15 @@ public:
 private:
 	GSDownloadTextureDK(GSDeviceDK* device, DkMemBlock memblock, u32 block_size, u32 buffer_size, u32 width,
 		u32 height, GSTexture::Format format);
+	// The copy is complete: drop the CPU cache's lines of the copied range.
+	void InvalidateCopiedRange();
 
 	GSDeviceDK* m_device = nullptr;
 	DkMemBlock m_memblock = nullptr;
 	u32 m_block_size = 0;
 	u32 m_buffer_size = 0;
 	u64 m_copy_submission = 0;
+	u32 m_copied_begin = 0;
+	u32 m_copied_end = 0;
 };
 #endif
