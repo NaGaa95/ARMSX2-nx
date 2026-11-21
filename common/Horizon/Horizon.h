@@ -23,6 +23,8 @@ namespace Horizon
 
 	// Lazily brings up the BSD socket
 	bool EnsureNetworkInitialized();
+	// Closes the sockets and SSL services (the Switch 2 core, before the launcher runs in this process).
+	void ShutdownNetwork();
 
 	// Init logging
 	void BreadcrumbInit(const char* report_dir);

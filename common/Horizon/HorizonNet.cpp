@@ -39,6 +39,15 @@ namespace Horizon
 		return s_network_available;
 	}
 
+	void ShutdownNetwork()
+	{
+		if (!s_network_available)
+			return;
+		sslExit();
+		socketExit();
+		s_network_available = false;
+	}
+
 	void BreadcrumbInit(const char* report_dir)
 	{
 		if (s_boot_fd >= 0 || !report_dir)

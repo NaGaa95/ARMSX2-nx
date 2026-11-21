@@ -41,17 +41,54 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <sys/stat.h>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef __SWITCH2__
 #include "nx2_platform.h"
+
+// The core ends with _Exit: no static destructors or atexit handlers beside threads nobody joined. drako3d releases its
+// GPU client only in an atexit handler, which the launcher's Mesa needs: -Wl,--wrap=atexit records the one nvLibInit
+// (the branch target of dk::detail::nvdev::initialize) registers, and the exit runs it.
+extern "C" int __real_atexit(void (*function)(void));
+extern "C" int __wrap_atexit(void (*function)(void));
+extern "C" void ArmsxDrako3dNvInitialize(void) __asm__("_ZN2dk6detail5nvdev10initializeEv") __attribute__((weak));
+
+namespace
+{
+	void (*s_drako3d_atexit)(void);
+
+	bool IsDrako3dGpuRegistration(uintptr_t caller)
+	{
+		const uintptr_t entry = reinterpret_cast<uintptr_t>(&ArmsxDrako3dNvInitialize);
+		if (!entry)
+			return false;
+		const uint32_t instruction = *reinterpret_cast<const uint32_t*>(entry);
+		if ((instruction & 0xFC000000u) != 0x14000000u) // b <nvLibInit>
+			return false;
+		int32_t offset = static_cast<int32_t>(instruction & 0x03FFFFFFu);
+		if (offset & 0x02000000)
+			offset -= 0x04000000;
+		const uintptr_t nv_lib_init = entry + static_cast<intptr_t>(offset) * 4;
+		return caller >= nv_lib_init && caller - nv_lib_init < 0x800; // (nvLibInit is 0x660 bytes, its atexit at +0x4ac)
+	}
+} // namespace
+
+extern "C" int __wrap_atexit(void (*function)(void))
+{
+	if (IsDrako3dGpuRegistration(reinterpret_cast<uintptr_t>(__builtin_return_address(0))))
+		s_drako3d_atexit = function;
+	return __real_atexit(function);
+}
 #endif
 
 namespace
@@ -314,7 +351,6 @@ namespace
 		{
 			s_launch_image = handoff->GetStringValue("Launch", "Path", "");
 			s_return_nro = handoff->GetStringValue("Launch", "Launcher", "");
-			handoff->RemoveSection("Launch");
 			s_launcher_game_settings = std::move(handoff);
 			auto lock = Host::GetSettingsLock();
 			Host::Internal::SetSwitchLaunchSettingsLayer(s_launcher_game_settings.get(), lock);
@@ -873,30 +909,42 @@ int main(int argc, char* argv[])
 		EmuFolders::Resources = "romfs:/resources";
 	else if (!EmuFolders::SetResourcesDirectory())
 	{
+#ifdef __SWITCH2__
+		ExitCoreWithError("The emulator's resources could not be read (romfs).");
+#else
 		ERROR_LOG("ROMFS is unavailable and no SD resources directory was found");
 		appletUnlockExit();
 		return 1;
+#endif
 	}
 
 	HorizonException::Breadcrumb("initializing settings");
 	if (!InitializeSettings())
 	{
+#ifdef __SWITCH2__
+		ExitCoreWithError("The emulator's settings could not be loaded (inis/PCSX2.ini).");
+#else
 		ERROR_LOG("Failed to initialize Switch settings");
 		if (romfs_available)
 			romfsExit();
 		appletUnlockExit();
 		return 1;
+#endif
 	}
 
 	HorizonException::Breadcrumb("CPUThreadInitialize");
 	if (!VMManager::Internal::CPUThreadInitialize())
 	{
-		ERROR_LOG("Failed to initialize the Switch frontend");
 		VMManager::Internal::CPUThreadShutdown();
+#ifdef __SWITCH2__
+		ExitCoreWithError("The emulator could not start (CPU thread initialization).");
+#else
+		ERROR_LOG("Failed to initialize the Switch frontend");
 		if (romfs_available)
 			romfsExit();
 		appletUnlockExit();
 		return 1;
+#endif
 	}
 
 	HorizonHost::SetCPUThread();
@@ -957,6 +1005,11 @@ int main(int argc, char* argv[])
 	Horizon::ExitTrace("shutdown begin");
 
 	StopInputPolling();
+#ifdef __SWITCH2__
+	// (before the log closes)
+	Host::SetSwitchCpuBoostEnabled(false);
+	ReturnToLauncher();
+#endif
 
 	appletUnhook(&applet_hook);
 #ifndef __SWITCH2__
@@ -980,10 +1033,7 @@ int main(int argc, char* argv[])
 	Horizon::ExitTrace("clean exit");
 	HorizonException::Breadcrumb("main returning");
 #ifdef __SWITCH2__
-	Host::SetSwitchCpuBoostEnabled(false);
-	ReturnToLauncher();
-	// The exit cleanup (after the static destructors) stops leftover threads and releases the HOME lock last.
-	nx2ExitReleaseLockLast();
+	ExitCore(0);
 #else
 	appletUnlockExit();
 #endif

@@ -51,13 +51,15 @@ endif()
 target_link_options(yadokari PRIVATE -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join)
 
 if(NINTENDO_SWITCH2)
-	# switch/nx2/nx2_platform.c: input, the exit cleanup of the process's threads and the usb:hs refusal.
+	# switch/nx2/nx2_platform.c: input, the exit cleanup of the process's threads and the usb:hs refusal; atexit:
+	# main.cpp runs drako3d's GPU release itself before _Exit.
 	target_link_options(yadokari PRIVATE
 		-Wl,--wrap=hidInitializeKeyboard
 		-Wl,--wrap=hidInitializeMouse
 		-Wl,--wrap=hidInitializeTouchScreen
 		-Wl,--wrap=__syscall_thread_create
-		-Wl,--wrap=smGetServiceWrapper)
+		-Wl,--wrap=smGetServiceWrapper
+		-Wl,--wrap=atexit)
 	target_link_libraries(yadokari PRIVATE "${DEVKITPRO}/portlibs/switch2/lib/libkaihen.a")
 endif()
 
