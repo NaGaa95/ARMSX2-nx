@@ -164,15 +164,15 @@ enum { SCR_GRAPHICS, SCR_DISPLAY, SCR_OSD, SCR_ENHANCE, SCR_GS_FIXES, SCR_AUDIO,
        SCR_GAMEFIXES, SCR_FRAMERATE, SCR_CONTROLLER, SCR_SYSTEM, SCR_POST, SCR_TEXTURES, SCR_GS_ADVANCED,
        SCR_CPU, SCR_PAD1, SCR_PAD2, SCR_BOOT, SCR_NETWORK, SCR_RA_ADVANCED, SCR_COUNT };
 
+inline constexpr char UPSCALE_KEY[] = "EmuCore/GS/upscale_multiplier";
 inline constexpr Opt S_graphics[] = {
   O_BOOT("Renderer", RENDERER_KEY, C_backend, "18"),
+  O_CHOICE("Resolution scale", UPSCALE_KEY, C_upscale, "1"),
   O_SUB("Display", SCR_DISPLAY),
   O_SUB("Rendering", SCR_ENHANCE),
   O_SUB("Post-processing", SCR_POST),
   O_SUB("Textures", SCR_TEXTURES),
-  O_SUB("Advanced graphics", SCR_GS_ADVANCED),
   O_SUB("On-screen display", SCR_OSD),
-  O_SUB("Manual graphics fixes", SCR_GS_FIXES),
 };
 inline constexpr Opt S_display[] = {
   O_CHOICE("Aspect ratio", "EmuCore/GS/AspectRatio", C_aspect, "Auto 4:3/3:2"),
@@ -216,7 +216,6 @@ inline constexpr Opt S_osd[] = {
   O_RANGE("Overlay margin", "EmuCore/GS/OsdMargin", 0, 100, 1, "10"),
 };
 inline constexpr Opt S_enhance[] = {
-  O_CHOICE("Resolution scale", "EmuCore/GS/upscale_multiplier", C_upscale, "1"),
   O_CHOICE("Texture filtering", "EmuCore/GS/filter", C_filter, "2"),
   O_CHOICE("Anisotropic filtering", "EmuCore/GS/MaxAnisotropy", C_aniso, "0"),
   O_CHOICE("Blending accuracy","EmuCore/GS/accurate_blending_unit", C_blend, "1"),
@@ -226,6 +225,8 @@ inline constexpr Opt S_enhance[] = {
   O_BOOL("PS2 antialiasing (AA1)", "EmuCore/GS/HWAA1", "false"),
   O_BOOL("Accurate alpha test", "EmuCore/GS/HWAccurateAlphaTest", "false"),
   O_VK("Raster order views", "EmuCore/GS/HWROV", "false"),
+  O_SUB("Advanced graphics", SCR_GS_ADVANCED),
+  O_SUB("Manual graphics fixes", SCR_GS_FIXES),
 };
 inline constexpr Opt S_post[] = {
   O_BOOL("FXAA",             "EmuCore/GS/fxaa", "false"),
@@ -313,11 +314,11 @@ inline constexpr Opt S_emu[] = {
 #ifdef __SWITCH2__
   O_BOOT("CPU Boost", CPU_BOOST_KEY, C_bool, "true"),
 #endif
+  O_SUB("CPU emulation", SCR_CPU),
+  O_SUB("Speed - Frame pacing", SCR_FRAMERATE),
+  O_SUB("Manual game fixes", SCR_GAMEFIXES),
   O_BOOL("Automatic game patches", PATCHES_KEY, "true"),
   O_BOOL("Cheats", CHEATS_KEY, "false"),
-  O_SUB("Speed - Frame pacing", SCR_FRAMERATE),
-  O_SUB("CPU emulation", SCR_CPU),
-  O_SUB("Manual game fixes", SCR_GAMEFIXES),
 };
 inline constexpr Opt S_cpu[] = {
   O_CHOICE("EE cycle rate",    "EmuCore/Speedhacks/EECycleRate", C_eecr, "0"),

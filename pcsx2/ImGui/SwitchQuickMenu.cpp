@@ -919,11 +919,12 @@ namespace
 				return GameRows();
 			case TAB_EMULATION:
 				rows.push_back(ToggleRow("CPU Boost", Host::IsSwitchCpuBoostEnabled(), Host::SetSwitchCpuBoostEnabled));
-				for (int screen : {SCR_FRAMERATE, SCR_CPU, SCR_GAMEFIXES, SCR_GS_FIXES})
+				for (int screen : {SCR_CPU, SCR_FRAMERATE, SCR_GAMEFIXES})
 					rows.push_back(ScreenLink(screen));
 				break;
 			case TAB_GRAPHICS:
-				for (int screen : {SCR_DISPLAY, SCR_ENHANCE, SCR_POST, SCR_TEXTURES, SCR_GS_ADVANCED, SCR_OSD})
+				rows.push_back(OptionRow(*FindOption(UPSCALE_KEY)));
+				for (int screen : {SCR_DISPLAY, SCR_ENHANCE, SCR_POST, SCR_TEXTURES, SCR_OSD})
 					rows.push_back(ScreenLink(screen));
 				break;
 			case TAB_AUDIO:
