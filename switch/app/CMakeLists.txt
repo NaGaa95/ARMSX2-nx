@@ -261,11 +261,11 @@ if(NINTENDO_SWITCH2)
 	# the core of the renderer it was asked for.
 	set(YADOKARI_NRO_NAME "armsx2_${ARMSX2_SWITCH2_RENDERER}")
 	set(YADOKARI_NACP_NAME "ARMSX2-nx")
-	set(YADOKARI_NACP_AUTHOR "ARMSX2 Team, PalindromicBreadLoaf & NaGaa95")
+	set(YADOKARI_NACP_AUTHOR "PalindromicBreadLoaf & naga")
 else()
 	set(YADOKARI_NRO_NAME "yadokari")
 	set(YADOKARI_NACP_NAME "Yadokari")
-	set(YADOKARI_NACP_AUTHOR "ARMSX2 Team & PalindromicBreadLoaf")
+	set(YADOKARI_NACP_AUTHOR "PalindromicBreadLoaf")
 endif()
 
 nx_generate_nacp(OUTPUT ${YADOKARI_NRO_NAME}.nacp

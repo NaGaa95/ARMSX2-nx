@@ -16,7 +16,7 @@ $(error "No Switch 2 devkit (libounce) in $(DEVKITPRO): install https://github.c
 endif
 
 APP_TITLE	:=	ARMSX2-nx
-APP_AUTHOR	:=	ARMSX2 Team, PalindromicBreadLoaf & NaGaa95
+APP_AUTHOR	:=	PalindromicBreadLoaf & naga
 RELEASE_VERSION	?=	1.0.0
 APP_VERSION	?=	$(RELEASE_VERSION)
 
