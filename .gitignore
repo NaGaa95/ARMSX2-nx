@@ -170,3 +170,5 @@ platforms/android/.kotlin/
 platforms/android/app/src/main/cpp/3rdparty/discord/include/
 /build-switch2-*/
 /switch/deps/switch2_mesa_sdk/
+/switch/launcher/build/
+/switch/launcher/armsx2-nx2.*
