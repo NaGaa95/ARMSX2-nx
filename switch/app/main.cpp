@@ -78,6 +78,7 @@ namespace
 	constexpr u32 NUM_LOCAL_PLAYERS = 2;
 #ifdef __SWITCH2__
 	std::string s_launch_image;
+	std::unique_ptr<INISettingsInterface> s_launcher_game_settings;
 	std::string s_return_nro;
 #else
 	constexpr const char* USB_SETTINGS_SECTION = "Horizon";
@@ -213,7 +214,7 @@ namespace
 #else
 			constexpr int native_renderer = static_cast<int>(GSRendererType::VK);
 #endif
-			const int renderer = s_settings_interface->GetIntValue("EmuCore/GS", "Renderer", static_cast<int>(GSRendererType::Auto));
+			const int renderer = Host::GetIntSettingValue("EmuCore/GS", "Renderer", static_cast<int>(GSRendererType::Auto));
 			if (renderer != native_renderer && renderer != static_cast<int>(GSRendererType::Auto) &&
 				renderer != static_cast<int>(GSRendererType::SW))
 			{
@@ -308,11 +309,15 @@ namespace
 		if (!FileSystem::FileExists(LAUNCH_HANDOFF_PATH))
 			return;
 
-		INISettingsInterface handoff(LAUNCH_HANDOFF_PATH);
-		if (handoff.Load())
+		auto handoff = std::make_unique<INISettingsInterface>(LAUNCH_HANDOFF_PATH);
+		if (handoff->Load())
 		{
-			s_launch_image = handoff.GetStringValue("Launch", "Path", "");
-			s_return_nro = handoff.GetStringValue("Launch", "Launcher", "");
+			s_launch_image = handoff->GetStringValue("Launch", "Path", "");
+			s_return_nro = handoff->GetStringValue("Launch", "Launcher", "");
+			handoff->RemoveSection("Launch");
+			s_launcher_game_settings = std::move(handoff);
+			auto lock = Host::GetSettingsLock();
+			Host::Internal::SetSwitchLaunchSettingsLayer(s_launcher_game_settings.get(), lock);
 		}
 		FileSystem::DeleteFilePath(LAUNCH_HANDOFF_PATH);
 		INFO_LOG("Launcher handoff: game '{}', return to '{}'", s_launch_image, s_return_nro);

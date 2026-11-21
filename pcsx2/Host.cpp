@@ -460,8 +460,18 @@ SettingsInterface* Host::Internal::GetSwitchSessionSettingsLayer()
 	return s_layered_settings_interface.GetLayer(LayeredSettingsInterface::LAYER_SWITCH_SESSION);
 }
 
+SettingsInterface* Host::Internal::GetSwitchLaunchSettingsLayer()
+{
+	return s_layered_settings_interface.GetLayer(LayeredSettingsInterface::LAYER_SWITCH_LAUNCH);
+}
+
 void Host::Internal::SetSwitchSessionSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>&)
 {
 	s_layered_settings_interface.SetLayer(LayeredSettingsInterface::LAYER_SWITCH_SESSION, sif);
+}
+
+void Host::Internal::SetSwitchLaunchSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>&)
+{
+	s_layered_settings_interface.SetLayer(LayeredSettingsInterface::LAYER_SWITCH_LAUNCH, sif);
 }
 #endif

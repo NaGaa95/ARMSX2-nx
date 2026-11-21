@@ -907,8 +907,10 @@ static PerGameOverrides GetUserGameOverrides()
 	if (const SettingsInterface* layer = Host::Internal::GetGameSettingsLayer())
 		overrides = ComputePerGameOverrides(*layer);
 #ifdef __SWITCH2__
-	if (const SettingsInterface* layer = Host::Internal::GetSwitchSessionSettingsLayer())
+	for (const SettingsInterface* layer : {Host::Internal::GetSwitchLaunchSettingsLayer(), Host::Internal::GetSwitchSessionSettingsLayer()})
 	{
+		if (!layer)
+			continue;
 		const PerGameOverrides additional = ComputePerGameOverrides(*layer);
 		overrides.gs_fixes |= additional.gs_fixes;
 		overrides.gs_hacks |= additional.gs_hacks;

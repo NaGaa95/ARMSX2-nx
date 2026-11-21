@@ -200,7 +200,9 @@ namespace Host
 
 #ifdef __SWITCH2__
 		SettingsInterface* GetSwitchSessionSettingsLayer();
+		SettingsInterface* GetSwitchLaunchSettingsLayer();
 		void SetSwitchSessionSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>& settings_lock);
+		void SetSwitchLaunchSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>& settings_lock);
 #endif
 
 		/// Implementation to retrieve a translated string.
