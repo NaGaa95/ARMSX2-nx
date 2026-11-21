@@ -225,6 +225,9 @@ void Host::SetFullscreen(bool enabled)
 
 void Host::LoadSettings(SettingsInterface& si, std::unique_lock<std::mutex>& lock)
 {
+#ifdef __SWITCH2__
+	HorizonHost::LoadPadBindings(si);
+#endif
 }
 
 void Host::CheckForSettingsChanges(const Pcsx2Config& old_config)

@@ -501,6 +501,66 @@ namespace
 		HorizonHost::RequestExit();
 	}
 
+#ifdef __SWITCH2__
+	constexpr PadDualshock2::Inputs PS2_BUTTONS[] = {
+		PadDualshock2::Inputs::PAD_PRESSURE,
+		PadDualshock2::Inputs::PAD_UP, PadDualshock2::Inputs::PAD_DOWN,
+		PadDualshock2::Inputs::PAD_LEFT, PadDualshock2::Inputs::PAD_RIGHT,
+		PadDualshock2::Inputs::PAD_TRIANGLE, PadDualshock2::Inputs::PAD_CIRCLE,
+		PadDualshock2::Inputs::PAD_CROSS, PadDualshock2::Inputs::PAD_SQUARE,
+		PadDualshock2::Inputs::PAD_SELECT, PadDualshock2::Inputs::PAD_START,
+		PadDualshock2::Inputs::PAD_L1, PadDualshock2::Inputs::PAD_R1,
+		PadDualshock2::Inputs::PAD_L2, PadDualshock2::Inputs::PAD_R2,
+		PadDualshock2::Inputs::PAD_L3, PadDualshock2::Inputs::PAD_R3,
+	};
+	constexpr u64 SWITCH_BUTTONS[] = {
+		0, HidNpadButton_A, HidNpadButton_B, HidNpadButton_X, HidNpadButton_Y, HidNpadButton_L, HidNpadButton_R,
+		HidNpadButton_ZL, HidNpadButton_ZR, HidNpadButton_StickL, HidNpadButton_StickR, HidNpadButton_Plus,
+		HidNpadButton_Minus, HidNpadButton_Up, HidNpadButton_Down, HidNpadButton_Left, HidNpadButton_Right,
+	};
+	static_assert(std::size(PS2_BUTTONS) == std::size(SwitchSettings::PAD_BINDINGS));
+	static_assert(std::size(SWITCH_BUTTONS) == std::size(SwitchSettings::C_npad));
+	std::array<std::array<std::atomic<u64>, std::size(PS2_BUTTONS)>, NUM_LOCAL_PLAYERS> s_pad_buttons{};
+	std::array<std::atomic<u32>, NUM_LOCAL_PLAYERS> s_pad_vibration{};
+
+	struct RumbleDevice
+	{
+		HidNpadIdType id = HidNpadIdType_No1;
+		u32 style = 0;
+		std::array<HidVibrationDeviceHandle, 2> handles{};
+		s32 count = 0;
+		u32 last = 0;
+	};
+
+	void SendRumble(RumbleDevice& device, u32 strength)
+	{
+		if (device.count == 0 || device.last == strength)
+			return;
+		const HidVibrationValue value{(strength & 0xFFFF) / 65535.0f, 160.0f, (strength >> 16) / 65535.0f, 320.0f};
+		for (s32 i = 0; i < device.count; ++i)
+			hidSendVibrationValue(device.handles[i], &value);
+		device.last = strength;
+	}
+
+	void PollPadRumble(RumbleDevice& device, const PadState& pad, u32 player, bool suppressed)
+	{
+		const HidNpadIdType id = padIsNpadActive(&pad, HidNpadIdType_Handheld) ?
+			HidNpadIdType_Handheld : static_cast<HidNpadIdType>(HidNpadIdType_No1 + player);
+		const u32 style = padIsNpadActive(&pad, id) ? hidGetNpadStyleSet(id) : 0;
+		if (device.id != id || device.style != style)
+		{
+			SendRumble(device, 0);
+			device = {.id = id, .style = style};
+			if (style != 0)
+			{
+				const s32 count = (style & (HidNpadStyleTag_NpadFullKey | HidNpadStyleTag_NpadHandheld | HidNpadStyleTag_NpadJoyDual)) ? 2 : 1;
+				if (R_SUCCEEDED(hidInitializeVibrationDevices(device.handles.data(), count, id, static_cast<HidNpadStyleTag>(style))))
+					device.count = count;
+			}
+		}
+		SendRumble(device, suppressed ? 0 : s_pad_vibration[player].load(std::memory_order_relaxed));
+	}
+#else
 	struct ButtonMap
 	{
 		u64 nx;
@@ -524,6 +584,7 @@ namespace
 		{HidNpadButton_StickL, PadDualshock2::Inputs::PAD_L3},
 		{HidNpadButton_StickR, PadDualshock2::Inputs::PAD_R3},
 	};
+#endif
 
 #ifndef __SWITCH2__
 	struct NavMap
@@ -578,8 +639,16 @@ namespace
 	{
 		if (captured)
 			held = 0;
+#ifdef __SWITCH2__
+		for (size_t i = 0; i < std::size(PS2_BUTTONS); ++i)
+		{
+			const u64 button = s_pad_buttons[player][i].load(std::memory_order_relaxed);
+			Pad::SetControllerState(player, static_cast<u32>(PS2_BUTTONS[i]), (held & button) ? 1.0f : 0.0f);
+		}
+#else
 		for (const ButtonMap& m : BUTTON_MAP)
 			Pad::SetControllerState(player, static_cast<u32>(m.ps2), (held & m.nx) ? 1.0f : 0.0f);
+#endif
 
 		ApplyStick(player, captured ? HidAnalogStickState{} : padGetStickPos(&pad, 0),
 			PadDualshock2::Inputs::PAD_L_LEFT, PadDualshock2::Inputs::PAD_L_RIGHT,
@@ -625,6 +694,7 @@ namespace
 			Horizon::ReserveCore3ForCallingThread();
 #ifdef __SWITCH2__
 		bool was_captured = false;
+		std::array<RumbleDevice, NUM_LOCAL_PLAYERS> rumble{};
 #else
 		bool prev_menu_combo = false;
 #endif
@@ -648,6 +718,8 @@ namespace
 				for (u32 player = 0; player < NUM_LOCAL_PLAYERS; player++)
 					FeedGamePad(player, s_pads[player], held[player], captured);
 			}
+			for (u32 player = 0; player < NUM_LOCAL_PLAYERS; ++player)
+				PollPadRumble(rumble[player], s_pads[player], player, captured || state != VMState::Running);
 			was_captured = captured;
 #else
 			s_nav_snapshot.store(held[0], std::memory_order_relaxed);
@@ -671,6 +743,10 @@ namespace
 
 			svcSleepThread(INPUT_POLL_NS);
 		}
+#ifdef __SWITCH2__
+		for (auto& device : rumble)
+			SendRumble(device, 0);
+#endif
 	}
 
 	void StartInputPolling()
@@ -691,6 +767,37 @@ namespace
 		s_input_thread.join();
 	}
 } // namespace
+
+#ifdef __SWITCH2__
+void HorizonHost::LoadPadBindings(const SettingsInterface& settings)
+{
+	for (u32 player = 0; player < NUM_LOCAL_PLAYERS; ++player)
+	{
+		const std::string section = Pad::GetConfigSection(player);
+		for (size_t i = 0; i < std::size(SwitchSettings::PAD_BINDINGS); ++i)
+		{
+			const auto& binding = SwitchSettings::PAD_BINDINGS[i];
+			const std::string_view path(binding.keys[player]);
+			const std::string key(path.substr(path.rfind('/') + 1));
+			const std::string name = settings.GetStringValue(section.c_str(), key.c_str(), binding.default_button);
+			auto button = std::find_if(std::begin(SwitchSettings::C_npad), std::end(SwitchSettings::C_npad),
+				[&](const auto& choice) { return name == choice.val; });
+			if (button == std::end(SwitchSettings::C_npad))
+				button = std::find_if(std::begin(SwitchSettings::C_npad), std::end(SwitchSettings::C_npad),
+					[&](const auto& choice) { return std::string_view(binding.default_button) == choice.val; });
+			s_pad_buttons[player][i].store(SWITCH_BUTTONS[button - std::begin(SwitchSettings::C_npad)], std::memory_order_relaxed);
+		}
+	}
+}
+
+void HorizonHost::SetPadVibration(unsigned player, float low, float high)
+{
+	if (player >= s_pad_vibration.size())
+		return;
+	const auto strength = [](float value) { return static_cast<u32>(std::lround(std::clamp(value, 0.0f, 1.0f) * 65535.0f)); };
+	s_pad_vibration[player].store(strength(low) | (strength(high) << 16), std::memory_order_relaxed);
+}
+#endif
 
 void Host::CommitBaseSettingChanges()
 {

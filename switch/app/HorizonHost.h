@@ -8,6 +8,8 @@
 #include <optional>
 #include <string>
 
+class SettingsInterface;
+
 namespace HorizonHost
 {
 	void SetCPUThread();
@@ -21,6 +23,10 @@ namespace HorizonHost
 
 	// Started by the launcher for one game: the program ends (and the launcher runs again) when that game's VM ends.
 	void SetExitWhenVMEnds(bool enabled);
+#ifdef __SWITCH2__
+	void LoadPadBindings(const SettingsInterface& settings);
+	void SetPadVibration(unsigned player, float low, float high);
+#endif
 
 	struct SoftwareKeyboardParameters
 	{

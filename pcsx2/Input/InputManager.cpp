@@ -1506,8 +1506,15 @@ void InputManager::SetUSBVibrationIntensity(u32 port, float large_or_single_moto
 extern "C" void ARMSX2_iOSUpdatePadVibration(u32 pad_index, float large_intensity, float small_intensity);
 #endif
 
+#ifdef __SWITCH2__
+#include "switch/app/HorizonHost.h"
+#endif
+
 void InputManager::SetPadVibrationIntensity(u32 pad_index, float large_or_single_motor_intensity, float small_motor_intensity)
 {
+#ifdef __SWITCH2__
+	HorizonHost::SetPadVibration(pad_index, large_or_single_motor_intensity, small_motor_intensity);
+#endif
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 	ARMSX2_iOSUpdatePadVibration(pad_index, large_or_single_motor_intensity, small_motor_intensity);
 #endif
