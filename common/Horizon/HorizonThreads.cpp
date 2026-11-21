@@ -10,6 +10,7 @@
 #include "common/Console.h"
 #include "common/Threading.h"
 
+#include <atomic>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -64,16 +65,48 @@ u64 Horizon::GetProcessCoreMask()
 	return R_SUCCEEDED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) ? mask : 0;
 }
 
+u64 Horizon::GetSpareCoreMask()
+{
+	const u64 mask = GetProcessCoreMask();
+#ifdef __SWITCH2__
+	return mask ? (u64{1} << (63 - __builtin_clzll(mask))) : 0;
+#else
+	return mask & 8;
+#endif
+}
+
+u64 Horizon::GetApplicationCoreMask()
+{
+#ifdef __SWITCH2__
+	return GetProcessCoreMask() & ~GetSpareCoreMask();
+#else
+	return GetProcessCoreMask() & 0x7;
+#endif
+}
+
 void Horizon::ReserveCore3ForCallingThread()
 {
-	const u64 mask = GetProcessCoreMask() & 0x7;
-	if (mask && R_FAILED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, __builtin_ctzll(mask), mask)))
+	const u64 mask = GetApplicationCoreMask();
+	if (!mask)
+		return;
+#ifdef __SWITCH2__
+	// The emulation threads are pinned to the first cores later: other threads start on the last two, in turn, rather
+	// than on the EE's core.
+	static std::atomic<u32> s_next_thread{0};
+	const int last = 63 - __builtin_clzll(mask);
+	const u64 others = mask & ~(1ull << last);
+	const int ideal = (others && (s_next_thread.fetch_add(1, std::memory_order_relaxed) & 1)) ? 63 - __builtin_clzll(others) : last;
+#else
+	const int ideal = __builtin_ctzll(mask);
+#endif
+	if (R_FAILED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, ideal, mask)))
 		Console.Warning("Switch: failed to restrict worker to application cores");
 }
 
 bool Horizon::PinCallingThreadToCore3()
 {
-	return (GetProcessCoreMask() & 8) && R_SUCCEEDED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, 3, 8));
+	const u64 spare = GetSpareCoreMask();
+	return spare && R_SUCCEEDED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, __builtin_ctzll(spare), spare));
 }
 
 __forceinline void Threading::Timeslice()
@@ -154,7 +187,7 @@ bool Threading::ThreadHandle::SetAffinity(u64 processor_mask) const
 	const u64 allowed_cores = Horizon::GetProcessCoreMask();
 	if (allowed_cores == 0)
 		return false;
-	const u64 mask = processor_mask ? (processor_mask & allowed_cores) : (allowed_cores & 0x7);
+	const u64 mask = processor_mask ? (processor_mask & allowed_cores) : Horizon::GetApplicationCoreMask();
 	if (!mask)
 		return false;
 

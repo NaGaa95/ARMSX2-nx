@@ -15,6 +15,7 @@
 #endif
 
 #if defined(__SWITCH__)
+#include "common/Horizon/Horizon.h"
 #include <thread>
 #endif
 
@@ -292,8 +293,14 @@ static CPUInfo CalcCPUInfo()
 #if defined(__SWITCH__)
 	if (!cpuinfo_initialize())
 	{
+#ifdef __SWITCH2__
+		// The cores this process may use (six under kaiHEN); hardware_concurrency answers the Switch's four.
+		const unsigned hc = static_cast<unsigned>(__builtin_popcountll(Horizon::GetProcessCoreMask()));
+		out.name = "NVIDIA T239 (Cortex-A78C)";
+#else
 		const unsigned hc = std::thread::hardware_concurrency();
 		out.name = "NVIDIA Tegra X1";
+#endif
 		out.num_threads = hc ? hc : 4;
 		out.num_big_cores = out.num_threads;
 		out.num_small_cores = 0;

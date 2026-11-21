@@ -13,6 +13,11 @@
 namespace Horizon
 {
 	u64 GetProcessCoreMask();
+	// The core kept for explicit assignment (input polling, the GS back thread): core 3 on the Switch, where the
+	// system shares it, and the last core of the process on the Switch 2 (six cores, mask 0x3f).
+	u64 GetSpareCoreMask();
+	// The cores general threads run on: every core of the process but the spare one.
+	u64 GetApplicationCoreMask();
 	void ReserveCore3ForCallingThread();
 	bool PinCallingThreadToCore3();
 

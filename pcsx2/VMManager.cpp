@@ -5105,13 +5105,15 @@ void VMManager::SetHardwareDependentDefaultSettings(SettingsInterface& si)
 static void InitializeProcessorList()
 {
 	const u64 allowed_cores = Horizon::GetProcessCoreMask();
-	for (u32 core = 0; core < 3; core++)
+	const u64 application_cores = Horizon::GetApplicationCoreMask();
+	const u64 spare_core = Horizon::GetSpareCoreMask();
+	for (u32 core = 0; core < 64; core++)
 	{
-		if (allowed_cores & (u64{1} << core))
+		if (application_cores & (u64{1} << core))
 			s_processor_list.push_back(core);
 	}
-	INFO_LOG("Switch: process core mask 0x{:x}, {} application cores. core 3 {}",
-		allowed_cores, s_processor_list.size(), (allowed_cores & 8) ? "available for explicit assignment" : "unavailable");
+	INFO_LOG("Switch: process core mask 0x{:x}, {} application cores, spare core {}",
+		allowed_cores, s_processor_list.size(), spare_core ? std::to_string(__builtin_ctzll(spare_core)) : "unavailable");
 }
 
 void VMManager::SetHardwareDependentDefaultSettings(SettingsInterface& si)
@@ -5194,14 +5196,15 @@ static u64 ApplyGSBackThreadPlacementLocked()
 	if (gs)
 	{
 		const u64 gs_mask = gs.GetAffinity();
-		if (gs_mask != 8)
+		const u64 spare_core = Horizon::GetSpareCoreMask();
+		if (gs_mask != spare_core)
 			s_gs_front_home_affinity = gs_mask;
-		if (s_gs_back_thread_handle && EmuConfig.GS.BackThreadUseCore3 && (Horizon::GetProcessCoreMask() & 8))
+		if (s_gs_back_thread_handle && EmuConfig.GS.BackThreadUseCore3 && spare_core)
 		{
-			gs.SetAffinity(8);
+			gs.SetAffinity(spare_core);
 			back_mask = s_gs_front_home_affinity;
 		}
-		else if (gs_mask == 8)
+		else if (gs_mask == spare_core)
 		{
 			gs.SetAffinity(s_gs_front_home_affinity);
 		}
