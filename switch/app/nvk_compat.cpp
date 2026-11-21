@@ -68,9 +68,22 @@ long sysconf(int name)
 	switch (name)
 	{
 		case _SC_PAGESIZE: return 4096;
+#ifdef __SWITCH2__
+		// The Switch 2: this process's total memory and its cores.
+		case _SC_PHYS_PAGES:
+		{
+			u64 total = 0;
+			if (R_FAILED(svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0)) || total == 0)
+				total = 4ull * 1024 * 1024 * 1024;
+			return static_cast<long>(total / 4096);
+		}
+		case _SC_NPROCESSORS_CONF:
+		case _SC_NPROCESSORS_ONLN: return __builtin_popcountll(Horizon::GetProcessCoreMask());
+#else
 		case _SC_PHYS_PAGES: return (3ll * 1024 * 1024 * 1024) / 4096;
 		case _SC_NPROCESSORS_CONF:
 		case _SC_NPROCESSORS_ONLN: return 4;
+#endif
 		default: return -1;
 	}
 }

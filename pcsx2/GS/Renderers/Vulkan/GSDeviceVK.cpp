@@ -78,6 +78,10 @@ namespace
 #include "common/Horizon/Horizon.h"
 #endif
 
+#ifdef __SWITCH2__
+#include "nx2_platform.h"
+#endif
+
 #include "imgui.h"
 
 #ifdef ARMSX2_HAS_LIBRASHADER
@@ -3425,6 +3429,10 @@ bool GSDeviceVK::UpdateWindow()
 		Console.Error("VK: Failed to create swap chain");
 		return false;
 	}
+#ifdef __SWITCH2__
+	// (Mesa set its own swap interval on the new swapchain: back to the console's pacing, 120 Hz VRR handheld)
+	nx2DisplayReapply();
+#endif
 
 	m_window_info = m_swap_chain->GetWindowInfo();
 	RenderBlankFrame();
@@ -3448,6 +3456,10 @@ void GSDeviceVK::ResizeWindow(u32 new_window_width, u32 new_window_height, float
 		return;
 	}
 
+#ifdef __SWITCH2__
+	// Docking or frame generation's 120 Hz changes the refresh rate, with or without a new size.
+	m_window_info.surface_refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
+#endif
 	if (m_swap_chain->GetWidth() == new_window_width && m_swap_chain->GetHeight() == new_window_height)
 	{
 		// skip unnecessary resizes
@@ -3466,6 +3478,9 @@ void GSDeviceVK::ResizeWindow(u32 new_window_width, u32 new_window_height, float
 	}
 
 	m_window_info = m_swap_chain->GetWindowInfo();
+#ifdef __SWITCH2__
+	m_window_info.surface_refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
+#endif
 }
 
 bool GSDeviceVK::SupportsExclusiveFullscreen() const
@@ -4003,16 +4018,27 @@ bool GSDeviceVK::CreateDeviceAndSwapChain()
 
 	if (!AcquireWindow(true))
 		return false;
-	m_window_system = GetWindowSystemExtensions(m_window_info);
 
 #ifdef __SWITCH__
 	m_window_info.type = WindowInfo::Type::VI;
 	m_window_info.window_handle = nwindowGetDefault();
+#ifdef __SWITCH2__
+	// The window nx2DisplayInit set up: 1920x1080 handheld, the TV's resolution docked.
+	u32 display_width = 1920, display_height = 1080;
+	nx2DisplaySize(&display_width, &display_height);
+	m_window_info.surface_width = display_width;
+	m_window_info.surface_height = display_height;
+	m_window_info.surface_refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
+	// The launcher ran Mesa earlier in this process: get a usable GPU device back.
+	nx2MesaGpuRecover();
+#else
 	m_window_info.surface_width = 1280;
 	m_window_info.surface_height = 720;
-	m_window_info.surface_scale = 1.0f;
 	m_window_info.surface_refresh_rate = 60.0f;
 #endif
+	m_window_info.surface_scale = 1.0f;
+#endif
+	m_window_system = GetWindowSystemExtensions(m_window_info);
 
 	// Libretro context sharing: the VkInstance comes from the frontend's
 	// negotiation interface. Function loading still goes through the wrapped
@@ -4149,6 +4175,10 @@ bool GSDeviceVK::CreateDeviceAndSwapChain()
 			ERROR_LOG("Failed to create swap chain");
 			return false;
 		}
+#ifdef __SWITCH2__
+		// (Mesa set its own swap interval on the new swapchain: back to the console's pacing, 120 Hz VRR handheld)
+		nx2DisplayReapply();
+#endif
 
 		// NOTE: This is assigned afterwards, because some platforms can modify the window info (e.g. Metal).
 		m_window_info = m_swap_chain->GetWindowInfo();
