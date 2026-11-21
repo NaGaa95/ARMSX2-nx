@@ -980,6 +980,7 @@ int main(int argc, char* argv[])
 	Horizon::ExitTrace("clean exit");
 	HorizonException::Breadcrumb("main returning");
 #ifdef __SWITCH2__
+	Host::SetSwitchCpuBoostEnabled(false);
 	ReturnToLauncher();
 	// The exit cleanup (after the static destructors) stops leftover threads and releases the HOME lock last.
 	nx2ExitReleaseLockLast();

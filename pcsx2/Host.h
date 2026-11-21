@@ -81,6 +81,12 @@ namespace Host
 	/// Requests settings reset. Can be called from any thread, will call back and apply on the CPU thread.
 	bool RequestResetSettings(bool folders, bool core, bool controllers, bool hotkeys, bool ui);
 
+#ifdef __SWITCH2__
+	// The current session's FastLoad state. Set on the VM thread.
+	bool IsSwitchCpuBoostEnabled();
+	void SetSwitchCpuBoostEnabled(bool enabled);
+#endif
+
 	/// Requests a specific display window size.
 	void RequestResizeHostDisplay(s32 width, s32 height);
 

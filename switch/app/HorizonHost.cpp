@@ -312,13 +312,41 @@ bool Host::InNoGUIMode()
 	return false;
 }
 
+#ifdef __SWITCH2__
+static std::atomic_bool s_cpu_boost_enabled{false};
+
+bool Host::IsSwitchCpuBoostEnabled()
+{
+	return s_cpu_boost_enabled.load(std::memory_order_acquire);
+}
+
+void Host::SetSwitchCpuBoostEnabled(bool enabled)
+{
+	if (IsSwitchCpuBoostEnabled() == enabled)
+		return;
+
+	const Result result = nx2SetCpuBoost(enabled);
+	if (R_SUCCEEDED(result))
+		s_cpu_boost_enabled.store(enabled, std::memory_order_release);
+	else
+		WARNING_LOG("Could not set CPU Boost to {} (0x{:08X})", enabled, result);
+}
+#endif
+
 void Host::OnVMStarting()
 {
+#ifdef __SWITCH2__
+	SetSwitchCpuBoostEnabled(true);
+#endif
 	INFO_LOG("Host: VM starting");
 }
 
 void Host::OnVMStarted()
 {
+#ifdef __SWITCH2__
+	if (!GetBaseBoolSettingValue("Switch", "KeepCpuBoost", true))
+		SetSwitchCpuBoostEnabled(false);
+#endif
 	INFO_LOG("Host: VM started");
 }
 
@@ -326,6 +354,7 @@ void Host::OnVMDestroyed()
 {
 #ifdef __SWITCH2__
 	SwitchQuickMenu::OnVMStopped();
+	SetSwitchCpuBoostEnabled(false);
 #endif
 	HorizonProfiler::Shutdown();
 	INFO_LOG("Host: VM destroyed");

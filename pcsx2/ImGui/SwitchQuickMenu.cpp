@@ -918,6 +918,7 @@ namespace
 			case TAB_GAME:
 				return GameRows();
 			case TAB_EMULATION:
+				rows.push_back(ToggleRow("CPU Boost", Host::IsSwitchCpuBoostEnabled(), Host::SetSwitchCpuBoostEnabled));
 				for (int screen : {SCR_FRAMERATE, SCR_CPU, SCR_GAMEFIXES, SCR_GS_FIXES})
 					rows.push_back(ScreenLink(screen));
 				break;
