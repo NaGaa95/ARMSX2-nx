@@ -59,6 +59,7 @@ static const char *LAUNCH_INI  = "sdmc:/switch/armsx2-nx/launch.ini";
 static const char *LAUNCH_ERROR= "sdmc:/switch/armsx2-nx/launch_error.txt";
 static const char *LOGS_DIR    = "sdmc:/switch/armsx2-nx/logs";
 static const char *LAUNCHER_LOG= "sdmc:/switch/armsx2-nx/logs/launcher.log";
+static const char *LAUNCHER_PREV_LOG= "sdmc:/switch/armsx2-nx/logs/launcher.prev.log";
 static const char *COVERS_DIR  = "sdmc:/switch/armsx2-nx/covers";
 static const char *GAMECFG_DIR = "sdmc:/switch/armsx2-nx/gamecfg";
 static const char *DEF_GAMEDIR = "sdmc:/switch/armsx2-nx/games";
@@ -85,6 +86,9 @@ static void openLauncherLog() {
   mkdir("sdmc:/switch",0777);
   mkdir(DATA_DIR,0777);
   mkdir(LOGS_DIR,0777);
+  // The previous run's log stays next to this one: a crash is only told by the log it left.
+  remove(LAUNCHER_PREV_LOG);
+  rename(LAUNCHER_LOG,LAUNCHER_PREV_LOG);
   g_logFile=fopen(LAUNCHER_LOG,"w");
 }
 static void closeLauncherLog() {

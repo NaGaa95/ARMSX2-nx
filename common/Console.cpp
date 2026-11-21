@@ -339,7 +339,8 @@ __ri void Log::WriteToFile(LOGLEVEL level, ConsoleColors color, std::string_view
 		}
 	}
 
-#if defined(__SWITCH__)
+// (Every line on the Switch 2: a fault ends the process there without a crash report, so the log is the record.)
+#if defined(__SWITCH__) && !defined(__SWITCH2__)
 	const Common::Timer::Value now = Common::Timer::GetCurrentValue();
 	if (Common::Timer::ConvertValueToMilliseconds(now - s_last_file_flush) >= SWITCH_FILE_FLUSH_INTERVAL_MS)
 	{

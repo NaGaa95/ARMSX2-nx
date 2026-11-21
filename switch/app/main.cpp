@@ -34,6 +34,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <string>
@@ -709,6 +710,19 @@ int main(int argc, char* argv[])
 	Horizon::AuditHeapToExitTrace("startup");
 
 	Log::SetTimestampsEnabled(true);
+#ifdef __SWITCH2__
+	// The previous run's log stays as emulog.prev.txt: on the Switch 2 a crash leaves no report, only its log.
+	{
+		const std::string log_path = Path::Combine(LOGS_DIR, "emulog.txt");
+		const std::string prev_path = Path::Combine(LOGS_DIR, "emulog.prev.txt");
+		std::remove(prev_path.c_str());
+		std::rename(log_path.c_str(), prev_path.c_str());
+	}
+#endif
+#ifdef __SWITCH2__
+	// INFO, as the launcher's EnableVerbose=false asks (SetFileLogPath opens it at DEBUG): every line is flushed.
+	Log::SetFileOutputLevel(LOGLEVEL_INFO, Path::Combine(LOGS_DIR, "emulog.txt"));
+#else
 	VMManager::Internal::SetFileLogPath(Path::Combine(LOGS_DIR, "emulog.txt"));
 #endif
 #ifdef __SWITCH2__

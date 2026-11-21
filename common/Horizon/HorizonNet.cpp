@@ -48,6 +48,13 @@ namespace Horizon
 
 		char path[768];
 		std::snprintf(path, sizeof(path), "%s/boot.txt", report_dir);
+#ifdef __SWITCH2__
+		// (the previous run's steps stay in boot.prev.txt: a crash there leaves nothing else)
+		char prev_path[768];
+		std::snprintf(prev_path, sizeof(prev_path), "%s/boot.prev.txt", report_dir);
+		std::remove(prev_path);
+		std::rename(path, prev_path);
+#endif
 		s_boot_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 	}
 
