@@ -283,6 +283,13 @@ bool Path::IsAbsolute(const std::string_view path)
 	return (path.length() >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
 			   path[1] == ':' && (path[2] == '/' || path[2] == '\\')) ||
 		   (path.length() >= 3 && path[0] == '\\' && path[1] == '\\');
+#elif defined(__SWITCH__)
+	// Horizon's device paths (sdmc:/, romfs:/, ums0:/) are absolute, like a path from the root.
+	if (path.length() >= 1 && path[0] == '/')
+		return true;
+	const size_t colon = path.find(':');
+	return colon != std::string_view::npos && colon > 0 && colon + 1 < path.length() && path[colon + 1] == '/' &&
+		   path.find('/') == colon + 1;
 #else
 	return (path.length() >= 1 && path[0] == '/');
 #endif
@@ -290,6 +297,10 @@ bool Path::IsAbsolute(const std::string_view path)
 
 std::string Path::RealPath(const std::string_view path)
 {
+#ifdef __SWITCH__
+	// No symbolic links on Horizon, and a device path (sdmc:/) must not gain a leading '/'.
+	return Path::Canonicalize(IsAbsolute(path) ? std::string(path) : Path::Combine(FileSystem::GetWorkingDirectory(), path));
+#endif
 	// Resolve non-absolute paths first.
 	std::vector<std::string_view> components;
 	// We need to keep the full combined path in scope
