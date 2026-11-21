@@ -7,4 +7,7 @@ file(READ "${FFX_A}" FFX_A_SRC)
 file(READ "${FFX_CAS}" FFX_CAS_SRC)
 string(REPLACE "#include \"ffx_a.h\"" "${FFX_A_SRC}" SRC "${SRC}")
 string(REPLACE "#include \"ffx_cas.h\"" "${FFX_CAS_SRC}" SRC "${SRC}")
+# What is left are the headers' comments about #include and their Metal section's: uam2 looks for #include before
+# comments are removed, so take the directive out of them.
+string(REPLACE "#include" "include" SRC "${SRC}")
 file(WRITE "${OUT}" "${SRC}")

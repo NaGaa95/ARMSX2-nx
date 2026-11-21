@@ -2,6 +2,18 @@
 # Copyright(c) 2026: PalindromicBreadLoaf (palindromicbreadloaf@tuta.com)
 # SPDX-License-Identifier: GPL-3.0+
 
+# Switch 2: the DK3D shaders are drako3d modules (SM 8.6), compiled by ounce-devkit's uam2 (same options as uam).
+if(NINTENDO_SWITCH2)
+	find_program(UAM_EXE NAMES uam2 PATHS "$ENV{DEVKITPRO}/tools/bin" "${DEVKITPRO}/tools/bin" "/opt/devkitpro/tools/bin"
+		NO_DEFAULT_PATH)
+	if(NOT UAM_EXE)
+		message(FATAL_ERROR "uam2 not found in ${DEVKITPRO}/tools/bin: install ouncebrew's ounce-devkit")
+	endif()
+	message(STATUS "DK3D shader compiler (Switch 2): ${UAM_EXE}")
+	set(UAM_DEPENDS "")
+	return()
+endif()
+
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../externals/uam/source/compiler_iface.cpp")
 	set(_uam_default_root "${CMAKE_CURRENT_LIST_DIR}/../externals/uam")
 else()

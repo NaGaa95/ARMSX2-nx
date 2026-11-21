@@ -143,6 +143,15 @@ endif()
 if(USE_VULKAN)
 	if(HORIZON)
 		add_subdirectory(3rdparty/glslang EXCLUDE_FROM_ALL)
+		if(NINTENDO_SWITCH2)
+			# mesa-nx's Switch 2 SDK (NVK), prepared by switch/deps/prepare_mesa_sdk_switch2.sh.
+			set(SWITCH_MESA_SDK_ROOT "${CMAKE_SOURCE_DIR}/switch/deps/switch2_mesa_sdk"
+				CACHE PATH "The Switch 2 Mesa SDK prepared by switch/deps/prepare_mesa_sdk_switch2.sh")
+			if(NOT EXISTS "${SWITCH_MESA_SDK_ROOT}/lib/libmesa_local.a")
+				message(FATAL_ERROR "Switch 2 Mesa SDK not found in ${SWITCH_MESA_SDK_ROOT}: "
+					"run switch/deps/prepare_mesa_sdk_switch2.sh (switch/build-switch2.sh does)")
+			endif()
+		endif()
 	else()
 		find_package(Shaderc REQUIRED)
 	endif()

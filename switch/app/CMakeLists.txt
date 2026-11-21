@@ -16,8 +16,11 @@ add_executable(yadokari
 set_source_files_properties(HorizonException.cpp HorizonExceptionEntry.S
 	PROPERTIES COMPILE_OPTIONS "-fno-lto")
 
-# USB mass-storage support
-include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/UsbHsFs.cmake")
+# USB mass-storage support. Not on the Switch 2: kaiHEN never answers a usb:hs lookup.
+if(NOT NINTENDO_SWITCH2)
+	include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/UsbHsFs.cmake")
+	target_compile_definitions(yadokari PRIVATE YADOKARI_USB_STORAGE=1)
+endif()
 
 target_include_directories(yadokari PRIVATE
 	"${CMAKE_BINARY_DIR}/common/include"
@@ -40,38 +43,68 @@ target_link_libraries(yadokari PRIVATE
 	${YADOKARI_CORE_LINK_TARGETS}
 	PCSX2_FLAGS
 	-Wl,--end-group
-	usbhsfs
-	deko3d
 )
+if(NOT NINTENDO_SWITCH2)
+	target_link_libraries(yadokari PRIVATE usbhsfs)
+endif()
 
 target_link_options(yadokari PRIVATE -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join)
 
-if(USE_VULKAN OR USE_OPENGL)
-	find_package(PkgConfig REQUIRED)
-	if(USE_OPENGL)
-		pkg_check_modules(NXVK REQUIRED nxvk-gl)
-	else()
-		pkg_check_modules(NXVK REQUIRED nxvk)
-	endif()
-
-	# newlib shims required by NXVK.
-	target_sources(yadokari PRIVATE nvk_compat.cpp)
-	target_include_directories(yadokari PRIVATE ${NXVK_INCLUDE_DIRS})
-	target_compile_options(yadokari PRIVATE ${NXVK_CFLAGS_OTHER})
-
-	target_link_libraries(yadokari PRIVATE ${NXVK_LDFLAGS})
+if(NINTENDO_SWITCH2)
+	# switch/nx2/nx2_platform.c: input, the exit cleanup of the process's threads and the usb:hs refusal.
+	target_link_options(yadokari PRIVATE
+		-Wl,--wrap=hidInitializeKeyboard
+		-Wl,--wrap=hidInitializeMouse
+		-Wl,--wrap=hidInitializeTouchScreen
+		-Wl,--wrap=__syscall_thread_create
+		-Wl,--wrap=smGetServiceWrapper)
+	target_link_libraries(yadokari PRIVATE "${DEVKITPRO}/portlibs/switch2/lib/libkaihen.a")
 endif()
 
+if(ARMSX2_DK3D)
+	target_link_libraries(yadokari PRIVATE ${ARMSX2_DK3D_LIBRARY})
+endif()
+
+if(USE_VULKAN)
+	if(NINTENDO_SWITCH2)
+		# mesa-nx's NVK, merged and localized by switch/deps/prepare_mesa_sdk_switch2.sh.
+		target_sources(yadokari PRIVATE nvk_compat.cpp)
+		target_link_libraries(yadokari PRIVATE
+			"${SWITCH_MESA_SDK_ROOT}/lib/libmesa_local.a"
+			"${DEVKITPRO}/portlibs/switch/lib/libexpat.a"
+			"${DEVKITPRO}/portlibs/switch/lib/libzstd.a"
+			"${DEVKITPRO}/portlibs/switch/lib/libz.a"
+			stdc++
+			m)
+	else()
+		find_package(PkgConfig REQUIRED)
+		if(USE_OPENGL)
+			pkg_check_modules(NXVK REQUIRED nxvk-gl)
+		else()
+			pkg_check_modules(NXVK REQUIRED nxvk)
+		endif()
+
+		# newlib shims required by NXVK.
+		target_sources(yadokari PRIVATE nvk_compat.cpp)
+		target_include_directories(yadokari PRIVATE ${NXVK_INCLUDE_DIRS})
+		target_compile_options(yadokari PRIVATE ${NXVK_CFLAGS_OTHER})
+
+		target_link_libraries(yadokari PRIVATE ${NXVK_LDFLAGS})
+	endif()
+endif()
+
+set(DK3D_ROMFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/romfs")
+file(MAKE_DIRECTORY "${DK3D_ROMFS_DIR}")
+set(DK3D_DKSH_FILES "")
+
+if(ARMSX2_DK3D)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/Uam.cmake")
 
 set(DK3D_SHADER_SRC_DIR "${CMAKE_SOURCE_DIR}/pcsx2/GS/Renderers/DK3D/shaders")
-set(DK3D_ROMFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/romfs")
 set(DK3D_ROMFS_SHADER_DIR "${DK3D_ROMFS_DIR}/shaders")
 file(MAKE_DIRECTORY "${DK3D_ROMFS_SHADER_DIR}")
 
-set(DK3D_DKSH_FILES "")
-
-# Compile each glsl to dksh with uam.
+# Compile each glsl to dksh with uam (uam2 on the Switch 2).
 function(dk3d_add_shader NAME STAGE)
 	add_custom_command(
 		OUTPUT "${DK3D_ROMFS_SHADER_DIR}/${NAME}.dksh"
@@ -168,6 +201,7 @@ list(APPEND DK3D_DKSH_FILES "${DK3D_ROMFS_SHADER_DIR}/cas_csh.dksh")
 
 add_custom_target(yadokari_shaders DEPENDS ${DK3D_DKSH_FILES})
 add_dependencies(yadokari yadokari_shaders)
+endif()
 
 # Embed resources into the romfs
 set(YADOKARI_RESOURCE_SRC_DIR "${CMAKE_SOURCE_DIR}/bin/resources")
@@ -216,17 +250,32 @@ add_custom_target(yadokari_resources DEPENDS "${YADOKARI_RESOURCE_STAMP}")
 
 # Pack the compiled shaders and resources into the NRO's ROMFS.
 dkp_add_asset_target(yadokari_romfs "${DK3D_ROMFS_DIR}")
-add_dependencies(yadokari_romfs yadokari_shaders yadokari_resources)
+add_dependencies(yadokari_romfs yadokari_resources)
+if(TARGET yadokari_shaders)
+	add_dependencies(yadokari_romfs yadokari_shaders)
+endif()
 set_property(TARGET yadokari_romfs APPEND PROPERTY DKP_ASSET_FILES ${DK3D_DKSH_FILES} "${YADOKARI_RESOURCE_STAMP}")
 
-nx_generate_nacp(OUTPUT yadokari.nacp
-	NAME "Yadokari"
-	AUTHOR "ARMSX2 Team & PalindromicBreadLoaf"
+if(NINTENDO_SWITCH2)
+	# One core per GPU driver (drako3d cannot open the GPU after Mesa in the same program): the launcher chainloads
+	# the core of the renderer it was asked for.
+	set(YADOKARI_NRO_NAME "armsx2_${ARMSX2_SWITCH2_RENDERER}")
+	set(YADOKARI_NACP_NAME "ARMSX2-nx")
+	set(YADOKARI_NACP_AUTHOR "ARMSX2 Team, PalindromicBreadLoaf & NaGaa95")
+else()
+	set(YADOKARI_NRO_NAME "yadokari")
+	set(YADOKARI_NACP_NAME "Yadokari")
+	set(YADOKARI_NACP_AUTHOR "ARMSX2 Team & PalindromicBreadLoaf")
+endif()
+
+nx_generate_nacp(OUTPUT ${YADOKARI_NRO_NAME}.nacp
+	NAME "${YADOKARI_NACP_NAME}"
+	AUTHOR "${YADOKARI_NACP_AUTHOR}"
 	VERSION "${YADOKARI_NRO_VERSION}"
 )
 nx_create_nro(yadokari
-	OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/yadokari.nro"
-	NACP "${CMAKE_CURRENT_BINARY_DIR}/yadokari.nacp"
+	OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${YADOKARI_NRO_NAME}.nro"
+	NACP "${CMAKE_CURRENT_BINARY_DIR}/${YADOKARI_NRO_NAME}.nacp"
 	ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
 	ROMFS yadokari_romfs
 )

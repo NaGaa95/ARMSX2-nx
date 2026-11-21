@@ -4,6 +4,44 @@
 
 #include "HorizonUsbStorage.h"
 
+#ifndef YADOKARI_USB_STORAGE
+
+// No USB mass storage on the Switch 2: kaiHEN never answers a usb:hs lookup.
+namespace HorizonUsbStorage
+{
+bool Initialize()
+{
+	return false;
+}
+
+void Shutdown()
+{
+}
+
+bool IsAvailable()
+{
+	return false;
+}
+
+const std::string& GetError()
+{
+	static const std::string s_error = "USB storage is not available on this console";
+	return s_error;
+}
+
+std::vector<Volume> GetVolumes()
+{
+	return {};
+}
+
+bool ConsumeChange()
+{
+	return false;
+}
+} // namespace HorizonUsbStorage
+
+#else
+
 #include "common/Horizon/Horizon.h"
 
 #include <usbhsfs.h>
@@ -119,3 +157,5 @@ bool ConsumeChange()
 	return s_changed.exchange(false, std::memory_order_acq_rel);
 }
 } // namespace HorizonUsbStorage
+
+#endif // YADOKARI_USB_STORAGE

@@ -41,8 +41,11 @@
 #include "GS/Renderers/Vulkan/GSDeviceVK.h"
 #endif
 
-#ifdef __SWITCH__
+#ifdef ARMSX2_DK3D
 #include "GS/Renderers/DK3D/GSDeviceDK.h"
+#endif
+
+#ifdef __SWITCH__
 #include "common/Horizon/Horizon.h"
 #define GS_BREADCRUMB(msg) Horizon::Breadcrumb(msg)
 #else
@@ -138,7 +141,7 @@ static RenderAPI GetAPIForRenderer(GSRendererType renderer)
 		case GSRendererType::VK:
 			return RenderAPI::Vulkan;
 
-#ifdef __SWITCH__
+#ifdef ARMSX2_DK3D
 		case GSRendererType::DK3D:
 			return RenderAPI::DK3D;
 #endif
@@ -198,7 +201,7 @@ static bool OpenGSDevice(GSRendererType renderer, bool clear_state_on_fail, bool
 			break;
 #endif
 
-#ifdef __SWITCH__
+#ifdef ARMSX2_DK3D
 		case RenderAPI::DK3D:
 			g_gs_device = std::make_unique<GSDeviceDK>();
 			break;

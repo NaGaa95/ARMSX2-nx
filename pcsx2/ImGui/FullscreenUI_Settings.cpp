@@ -2923,7 +2923,7 @@ void FullscreenUI::DrawGraphicsSettingsPage(SettingsInterface* bsi, bool show_ad
 #if defined(ENABLE_VULKAN) && !defined(__APPLE__)
 		"14", //GSRendererType::VK,
 #endif
-#ifdef __SWITCH__
+#ifdef ARMSX2_DK3D
 		"18", //GSRendererType::DK3D,
 #endif
 #ifdef __APPLE__

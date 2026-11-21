@@ -1565,15 +1565,18 @@ endif()
 if(HORIZON)
 	list(APPEND pcsx2HostSources
 		Host/AudoutAudioStream.cpp)
-	# deko3d GS backend.
+	list(APPEND pcsx2Sources
+		Android/AndroidPcapStubs.cpp)
+endif()
+
+if(ARMSX2_DK3D)
+	# deko3d GS backend (drako3d on the Switch 2).
 	list(APPEND pcsx2GSSources
 		GS/Renderers/DK3D/GSDeviceDK.cpp
 		GS/Renderers/DK3D/GSTextureDK.cpp)
 	list(APPEND pcsx2GSHeaders
 		GS/Renderers/DK3D/GSDeviceDK.h
 		GS/Renderers/DK3D/GSTextureDK.h)
-	list(APPEND pcsx2Sources
-		Android/AndroidPcapStubs.cpp)
 endif()
 
 if(ANDROID)
@@ -1960,6 +1963,11 @@ if(NOT HORIZON)
 	target_link_libraries(PCSX2_FLAGS INTERFACE
 		discord-rpc
 	)
+endif()
+
+if(ARMSX2_DK3D AND NINTENDO_SWITCH2)
+	# switch/drako3d's deko3d.h names drako3d's header (libounce's include directory).
+	target_include_directories(PCSX2_FLAGS BEFORE INTERFACE "${CMAKE_SOURCE_DIR}/switch/drako3d")
 endif()
 
 if(WIN32)

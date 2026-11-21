@@ -755,7 +755,11 @@ const char* Pcsx2Config::GSOptions::GetRendererName(GSRendererType type)
 		case GSRendererType::Metal:  return "Metal";
 		case GSRendererType::OGL:    return "OpenGL";
 		case GSRendererType::VK:     return "Vulkan";
+#ifdef __SWITCH2__
+		case GSRendererType::DK3D:   return "Drako3D";
+#else
 		case GSRendererType::DK3D:   return "Deko3D";
+#endif
 		case GSRendererType::SW:     return "Software";
 		case GSRendererType::Null:   return "Null";
 		case GSRendererType::NullHW: return "Null (HW)";

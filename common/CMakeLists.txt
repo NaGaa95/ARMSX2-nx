@@ -214,6 +214,13 @@ elseif(HORIZON)
 		Horizon/compat/netinet/ip.h
 	)
 	target_include_directories(common PUBLIC Horizon/compat)
+	if(NINTENDO_SWITCH2)
+		# The Switch 2 platform helpers shared with the other NX ports (display, cores, JIT publication, exit).
+		target_sources(common PRIVATE
+			${CMAKE_SOURCE_DIR}/switch/nx2/nx2_platform.c
+			${CMAKE_SOURCE_DIR}/switch/nx2/nx2_platform.h)
+		target_include_directories(common PUBLIC ${CMAKE_SOURCE_DIR}/switch/nx2)
+	endif()
 	target_compile_definitions(common PRIVATE _GNU_SOURCE)
 else()
 	target_sources(common PRIVATE

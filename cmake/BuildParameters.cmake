@@ -58,6 +58,32 @@ endif()
 if(NOT APPLE AND NOT HORIZON)
 	option(USE_OPENGL "Enable OpenGL GS renderer" ON)
 endif()
+
+# The Switch's native GS renderer: deko3d on the Switch, drako3d (deko3d's API on the Ampere GPU) on the Switch 2.
+# The Switch 2 builds one core per GPU driver, since drako3d cannot open the GPU after Mesa ran in the same program:
+# ARMSX2_SWITCH2_RENDERER is drako3d (DK3D) or vulkan (Mesa's NVK, from mesa-nx).
+set(ARMSX2_DK3D OFF)
+if(HORIZON)
+	if(NINTENDO_SWITCH2)
+		set(ARMSX2_SWITCH2_RENDERER "drako3d" CACHE STRING "Switch 2 core GPU driver: drako3d or vulkan")
+		set_property(CACHE ARMSX2_SWITCH2_RENDERER PROPERTY STRINGS drako3d vulkan)
+		if(ARMSX2_SWITCH2_RENDERER STREQUAL "drako3d")
+			set(ARMSX2_DK3D ON)
+			set(USE_VULKAN OFF CACHE BOOL "Enable Vulkan GS renderer" FORCE)
+			set(ARMSX2_DK3D_LIBRARY "${DEVKITPRO}/libounce/lib/libdrako3d.a")
+			if(NOT EXISTS "${ARMSX2_DK3D_LIBRARY}")
+				message(FATAL_ERROR "drako3d not found: ${ARMSX2_DK3D_LIBRARY} (install ouncebrew's ounce-devkit)")
+			endif()
+		elseif(ARMSX2_SWITCH2_RENDERER STREQUAL "vulkan")
+			set(USE_VULKAN ON CACHE BOOL "Enable Vulkan GS renderer" FORCE)
+		else()
+			message(FATAL_ERROR "ARMSX2_SWITCH2_RENDERER must be drako3d or vulkan, not '${ARMSX2_SWITCH2_RENDERER}'")
+		endif()
+	else()
+		set(ARMSX2_DK3D ON)
+		set(ARMSX2_DK3D_LIBRARY deko3d)
+	endif()
+endif()
 option(USE_VULKAN "Enable Vulkan GS renderer" ON)
 # What the GL renderer asks the host for. Android is GL ES whether this is set
 # or not; it exists for the other platforms that have only ES - webOS, and the
@@ -180,7 +206,11 @@ elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_SYSTEM_PROCESSOR
 		add_compile_options("-march=armv8.4-a+crypto" "-mcpu=apple-m1")
 	elseif(HORIZON)
 		set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-		add_compile_options("-march=armv8-a+crc" "-mtune=cortex-a57" -flax-vector-conversions)
+		# The Switch 2's Cortex-A78C flags come from libounce's toolchain.
+		if(NOT NINTENDO_SWITCH2)
+			add_compile_options("-march=armv8-a+crc" "-mtune=cortex-a57")
+		endif()
+		add_compile_options(-flax-vector-conversions)
 		option(ARMSX2_FRAME_POINTERS "Keep frame pointers so the Switch profiler can record full call stacks" OFF)
 		if(ARMSX2_FRAME_POINTERS)
 			add_compile_options(-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer)
@@ -250,6 +280,9 @@ elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_SYSTEM_PROCESSOR
 			OVERRIDE_HOST_CACHE_LINE_SIZE=64
 			__SWITCH__=1
 			__LINUX_ERRNO_EXTENSIONS__=1)
+		if(NINTENDO_SWITCH2)
+			list(APPEND PCSX2_DEFS __SWITCH2__=1)
+		endif()
 	endif()
 else()
 	message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}")
@@ -406,6 +439,10 @@ endif()
 
 if(USE_VULKAN)
 	list(APPEND PCSX2_DEFS ENABLE_VULKAN)
+endif()
+
+if(ARMSX2_DK3D)
+	list(APPEND PCSX2_DEFS ARMSX2_DK3D)
 endif()
 
 if(X11_API)

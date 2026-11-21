@@ -420,8 +420,10 @@ GSRendererType GSUtil::GetPreferredRenderer()
 #elif defined(_WIN32)
 		// Use D3D device info to select renderer.
 		preferred_renderer = D3D::GetPreferredRenderer();
-#elif defined(__SWITCH__)
+#elif defined(ARMSX2_DK3D)
 		preferred_renderer = GSRendererType::DK3D;
+#elif defined(__SWITCH__)
+		preferred_renderer = GSRendererType::VK;
 #elif defined(__ANDROID__)
 		// Android: Auto resolves to Vulkan HW on Adreno (the tile-memory framebuffer-fetch fast
 		// path), on any device whose GL driver cannot read the render target in-tile, and on every

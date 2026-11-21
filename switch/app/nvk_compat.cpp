@@ -33,15 +33,6 @@ uid_t geteuid(void) { return 0; }
 gid_t getgid(void) { return 0; }
 gid_t getegid(void) { return 0; }
 
-int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset)
-{
-	(void)how;
-	(void)set;
-	if (oldset)
-		std::memset(oldset, 0, sizeof(*oldset));
-	return 0;
-}
-
 // Mesa disables its disk cache when these unavailable POSIX calls fail.
 int getpwuid_r(uid_t uid, struct passwd* pwd, char* buf, size_t buflen, struct passwd** result)
 {
@@ -67,14 +58,6 @@ int fstatat(int fd, const char* path, struct stat* buf, int flag)
 	(void)path;
 	(void)buf;
 	(void)flag;
-	errno = ENOSYS;
-	return -1;
-}
-
-int flock(int fd, int operation)
-{
-	(void)fd;
-	(void)operation;
 	errno = ENOSYS;
 	return -1;
 }
