@@ -256,6 +256,15 @@ extern vtlb_ProtectionMode mmap_GetRamPageInfo(u32 paddr);
 extern void mmap_MarkCountedRamPage(u32 paddr);
 extern void mmap_ResetBlockTracking();
 
+// Self-modifying code is caught by write-protecting the pages that hold recompiled code, and a write to one of them
+// faults. The Switch 2 (kaiHEN) never hands a CPU fault to the program, it ends the process, so there every block in
+// main RAM checks its own code when it runs (ProtMode_Manual) and no page is ever write-protected.
+#ifdef __SWITCH2__
+static constexpr bool VTLB_SMC_WRITE_PROTECTION = false;
+#else
+static constexpr bool VTLB_SMC_WRITE_PROTECTION = true;
+#endif
+
 // --------------------------------------------------------------------------------------
 //  Goemon game fix
 // --------------------------------------------------------------------------------------

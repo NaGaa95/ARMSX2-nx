@@ -15,6 +15,11 @@
 #include "common/Darwin/DarwinMisc.h"
 #endif
 
+#ifdef __SWITCH2__
+#include "common/Horizon/Horizon.h" // (<switch.h> with libnx's u128/s128 renamed, before nx2_platform.h)
+#include "nx2_platform.h"
+#endif
+
 const vixl::aarch64::Register& armWRegister(int n)
 {
 	using namespace vixl::aarch64;
@@ -277,15 +282,25 @@ void ArmCodePatchFlusher::Finish()
 	if (m_lines.empty())
 		return;
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__SWITCH2__)
 	// sys_icache_invalidate (via HostSys::FlushInstructionCache) is the only
 	// interface that stays correct under iOS dual-map and Legacy W^X, so touched
 	// lines are coalesced into runs, one call per run. A run also invalidates
-	// the gaps inside it, hence the page-sized gap cap.
+	// the gaps inside it, hence the page-sized gap cap. On the Switch 2 the
+	// patched words live in kaiHEN's staging copy and HostSys publishes them:
+	// the runs go to kaiHEN together, as one request.
 	std::sort(m_lines.begin(), m_lines.end());
 	const size_t granule = armCodePatchGranule();
+#ifdef __SWITCH2__
+	// kaiHEN copies every published byte: merge only close runs.
+	constexpr uintptr_t kMaxGap = 256;
+#else
 	constexpr uintptr_t kMaxGap = 4096;
+#endif
 
+#ifdef __SWITCH2__
+	nx2JitBatchBegin();
+#endif
 	uintptr_t lo = m_lines[0];
 	uintptr_t hi = m_lines[0] + granule;
 	for (size_t i = 1; i < m_lines.size(); i++)
@@ -300,6 +315,9 @@ void ArmCodePatchFlusher::Finish()
 		hi = m_lines[i] + granule;
 	}
 	HostSys::FlushInstructionCache(reinterpret_cast<void*>(lo), static_cast<u32>(hi - lo));
+#ifdef __SWITCH2__
+	nx2JitBatchEnd();
+#endif
 #else
 	// The `dsb ish` between the two loops is required: the clean has to
 	// complete before the invalidate.
@@ -736,6 +754,10 @@ u8* ArmConstantPool::GetLiteral(const u128& value)
 	HostSys::BeginCodeWriteRange(literal_ptr, sizeof(value));
 	std::memcpy(armGetWritableCodePtr(literal_ptr), &value, sizeof(value));
 	HostSys::EndCodeWriteRange(literal_ptr, sizeof(value));
+#ifdef __SWITCH2__
+	// The pool is read through the code's RX view, which kaiHEN only updates from the staging copy when published.
+	HostSys::FlushInstructionCache(literal_ptr, sizeof(value));
+#endif
 	m_used = offset + sizeof(value);
 	return literal_ptr;
 }
@@ -758,6 +780,10 @@ u8* ArmConstantPool::GetBlob(const u8* bytes, size_t len)
 	HostSys::BeginCodeWriteRange(blob_ptr, len);
 	std::memcpy(armGetWritableCodePtr(blob_ptr), bytes, len);
 	HostSys::EndCodeWriteRange(blob_ptr, len);
+#ifdef __SWITCH2__
+	// (see GetLiteral: a manual SMC check compares guest memory with this copy, through the RX view)
+	HostSys::FlushInstructionCache(blob_ptr, static_cast<u32>(len));
+#endif
 	m_used = offset + static_cast<u32>(len);
 	return blob_ptr;
 }

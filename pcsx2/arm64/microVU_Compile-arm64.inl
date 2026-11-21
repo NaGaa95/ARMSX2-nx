@@ -1200,6 +1200,10 @@ static void* vuAotBailTarget(u32 vu, u8* rec)
 	void* v = mVUcompile(mVU, pc & (mVU.microMemSize - 8), reinterpret_cast<uptr>(&k));
 	vuaot::g_vuAotShadowCompile = false;
 	*reinterpret_cast<void**>(armGetWritableCodePtr(reinterpret_cast<u8*>(slot))) = v;
+#ifdef __SWITCH2__
+	// The slot is read through the code's RX view: kaiHEN updates it from the staging copy when published.
+	HostSys::FlushInstructionCache(slot, sizeof(void*));
+#endif
 	mVUcloseCodeCache(mVU);
 	mVU.prog.cur = savedCur;
 	return v;

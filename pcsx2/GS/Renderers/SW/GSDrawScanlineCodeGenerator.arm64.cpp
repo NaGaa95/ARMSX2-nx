@@ -26,6 +26,10 @@ static void* gsGetWritableCodePtr(void* rx_ptr)
 {
 	return static_cast<u8*>(rx_ptr) + DarwinMisc::g_code_rw_offset;
 }
+#elif defined(__SWITCH__)
+// The Switch's JIT code memory is written through its RW view (on the Switch 2, kaiHEN's staging copy).
+#include "common/HostSys.h"
+static void* gsGetWritableCodePtr(void* rx_ptr) { return HostSys::JitGetWritablePointer(rx_ptr); }
 #else
 static void* gsGetWritableCodePtr(void* rx_ptr) { return rx_ptr; }
 #endif

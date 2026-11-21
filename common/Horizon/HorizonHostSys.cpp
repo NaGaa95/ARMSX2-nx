@@ -18,6 +18,10 @@
 #include "common/Horizon/Horizon.h"
 #include "common/Horizon/HorizonFastmem.h"
 
+#ifdef __SWITCH2__
+#include "nx2_platform.h"
+#endif
+
 namespace
 {
 	constexpr size_t FASTMEM_AREA_SIZE = 0x100000000ULL;
@@ -239,6 +243,17 @@ void* HostSys::JitGetWritablePointer(void* exec_ptr)
 
 void HostSys::FlushInstructionCache(void* address, u32 size)
 {
+#ifdef __SWITCH2__
+	// kaiHEN: a Jit's RW view is a staging copy, and code becomes executable once published to its RX view.
+	if (size == 0 || nx2JitPublishRx(address, size))
+		return;
+	{
+		// Code kaiHEN refused to publish would run as zeros or stale bytes: stop here, with a log line.
+		std::lock_guard lock(s_code_mutex);
+		if (FindCodeMapping(address))
+			pxFailRel("kaiHEN refused to publish recompiled code");
+	}
+#endif
 	char* const rx = static_cast<char*>(address);
 	char* rw = rx;
 	{
@@ -354,6 +369,9 @@ u8* SharedMemoryMappingArea::Map(void* file_handle, size_t file_offset, void* ma
 			Console.Error("SharedMemoryMappingArea::Map: jitCreate(%zu) failed: 0x%08x", map_size, create_result);
 			return nullptr;
 		}
+#ifndef __SWITCH2__
+		// (kaiHEN maps the RX view from the start; a transition would publish the whole region. Each block is
+		// published when it is flushed instead.)
 		const Result transition_result = jitTransitionToExecutable(&jit);
 		if (R_FAILED(transition_result))
 		{
@@ -361,13 +379,19 @@ u8* SharedMemoryMappingArea::Map(void* file_handle, size_t file_offset, void* ma
 			jitClose(&jit);
 			return nullptr;
 		}
+#endif
 
 		u8* const rx = static_cast<u8*>(jitGetRxAddr(&jit));
 		u8* const rw = static_cast<u8*>(jitGetRwAddr(&jit));
 		{
 			std::lock_guard lock(s_code_mutex);
-			s_code_mappings.emplace(rx, HorizonCodeMapping{jit, rx, rw, map_size});
+			[[maybe_unused]] const auto it = s_code_mappings.emplace(rx, HorizonCodeMapping{jit, rx, rw, map_size}).first;
+#ifdef __SWITCH2__
+			// (a std::map node: the Jit stays at this address until Unmap)
+			nx2JitRegister(&it->second.jit);
+#endif
 		}
+		DevCon.WriteLn("SharedMemoryMappingArea::Map: %zu MiB of code, RX %p, RW %p", map_size >> 20, rx, rw);
 		m_num_mappings++;
 		return rx;
 	}
@@ -450,6 +474,9 @@ bool SharedMemoryMappingArea::Unmap(void* map_base, size_t map_size, bool is_fil
 		const auto it = s_code_mappings.find(static_cast<u8*>(map_base));
 		if (it != s_code_mappings.end())
 		{
+#ifdef __SWITCH2__
+			nx2JitUnregister(&it->second.jit);
+#endif
 			Jit jit = it->second.jit;
 			s_code_mappings.erase(it);
 			lock.unlock();

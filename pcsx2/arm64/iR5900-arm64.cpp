@@ -3744,6 +3744,14 @@ static bool memory_protect_recompiled_code(u32 startpc, u32 size)
 			else
 			{
 				// Pool full — per-word fallback (the original emission).
+#ifdef __SWITCH2__
+				// Every RAM block takes a snapshot here: start a new generation instead of checking word by word.
+				if (!eeRecNeedsReset)
+				{
+					Console.WriteLn("EE: the SMC snapshot pool is full, the recompiler resets");
+					eeRecNeedsReset = true;
+				}
+#endif
 				u32 lpc = inpage_ptr;
 				u32 stg = inpage_sz;
 
@@ -3767,7 +3775,7 @@ static bool memory_protect_recompiled_code(u32 startpc, u32 size)
 
 			// Counted blocks: track how often this block runs. If the counter overflows,
 			// reset the page to write-protected mode (faster than manual checks).
-			if (!contains_thread_stack && manual_counter[inpage_ptr >> 12] <= 3)
+			if (VTLB_SMC_WRITE_PROTECTION && !contains_thread_stack && manual_counter[inpage_ptr >> 12] <= 3)
 			{
 				armMoveAddressToReg(RSCRATCHADDR, &manual_page[inpage_ptr >> 12]);
 				armAsm->Ldrh(RWSCRATCH, a64::MemOperand(RSCRATCHADDR));
@@ -3827,8 +3835,10 @@ static void recReserve()
 	// 256KB: the FX-03a manual-check snapshots are blobs, not dedup'd
 	// literals — a manual-heavy title banks ~70-80KB of them per rec
 	// generation (SotC 17k words, UYA 19k). Overflow falls back to the
-	// per-word check emission, so this is a soft ceiling.
-	const u32 poolSize = 262144;
+	// per-word check emission, so this is a soft ceiling. On the Switch 2 every
+	// block in main RAM is manually checked (no page faults there, see vtlb.h),
+	// so the snapshots of a whole rec generation go here: 4 MiB.
+	const u32 poolSize = VTLB_SMC_WRITE_PROTECTION ? 262144 : 4 * 1024 * 1024;
 	u8* poolBase = SysMemory::GetEERecEnd() - poolSize;
 	s_eeConstantPool.Init(poolBase, poolSize);
 

@@ -32,6 +32,10 @@
 #include "arm64/RecCrashReport-arm64.h"
 #endif
 
+#ifdef __SWITCH__
+#include "common/Horizon/HorizonFastmem.h"
+#endif
+
 #include "common/BitUtils.h"
 #include "common/Error.h"
 
@@ -1396,6 +1400,17 @@ bool vtlb_Core_Alloc()
 		EmuConfig.Cpu.Recompiler.EnableFastmem = false;
 		Console.WriteLn("Fastmem disabled: executable code memory is unavailable");
 	}
+#ifdef __SWITCH__
+	else if (!HorizonFastmem::IsSupported())
+	{
+		// Horizon fastmem needs the process-memory syscalls and a fault handler (title override on the Switch, never
+		// under kaiHEN): the vtlb serves every access.
+		vtlbdata.fastmem_base = 0;
+		EmuConfig.Cpu.Recompiler.EnableFastmem = false;
+		s_fastmem_area_unavailable = true;
+		Console.WriteLn("Fastmem disabled: %s", HorizonFastmem::GetSupportReason());
+	}
+#endif
 	else
 	{
 		s_fastmem_area = SharedMemoryMappingArea::Create(FASTMEM_AREA_SIZE);
@@ -1545,6 +1560,9 @@ vtlb_ProtectionMode mmap_GetRamPageInfo(u32 paddr)
 
 	rampage >>= __pageshift;
 
+	if constexpr (!VTLB_SMC_WRITE_PROTECTION)
+		return ProtMode_Manual;
+
 	return m_PageProtectInfo[rampage].Mode;
 }
 
@@ -1573,6 +1591,12 @@ void mmap_MarkCountedRamPage(u32 paddr)
 	// mapping into eeMem->Main.
 
 	m_PageProtectInfo[rampage].ReverseRamMap = paddr;
+
+	if constexpr (!VTLB_SMC_WRITE_PROTECTION)
+	{
+		m_PageProtectInfo[rampage].Mode = ProtMode_Manual;
+		return;
+	}
 
 	if (m_PageProtectInfo[rampage].Mode == ProtMode_Write)
 		return; // skip town if we're already protected.
@@ -1662,7 +1686,8 @@ void mmap_ResetBlockTracking()
 {
 	//DbgCon.WriteLn( "vtlb/mmap: Block Tracking reset..." );
 	std::memset(m_PageProtectInfo, 0, sizeof(m_PageProtectInfo));
-	if (eeMem)
+	// (nothing to unprotect where pages are never write-protected)
+	if (eeMem && VTLB_SMC_WRITE_PROTECTION)
 		HostSys::MemProtect(eeMem->Main, Ps2MemSize::ExposedRam, PageAccess_ReadWrite());
 	vtlb_UpdateFastmemProtection(0, Ps2MemSize::ExposedRam, PageAccess_ReadWrite());
 }

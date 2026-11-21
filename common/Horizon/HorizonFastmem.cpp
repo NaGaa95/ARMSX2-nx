@@ -117,8 +117,12 @@ namespace
 		{
 			if (!envIsSyscallHinted(syscall.number))
 			{
+#ifdef __SWITCH2__
+				std::snprintf(support.reason.data(), support.reason.size(), "kaiHEN provides no %s", syscall.name);
+#else
 				std::snprintf(support.reason.data(), support.reason.size(),
 					"%s is not available. Use title override instead of applet mode", syscall.name);
+#endif
 				return support;
 			}
 		}
