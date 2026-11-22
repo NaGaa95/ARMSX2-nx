@@ -34,7 +34,7 @@ if [[ "${1:-}" == "--check" ]]; then
 fi
 
 DEFAULT_DIST="${ROOT}/../mesa-nx/dist"
-ZIP="${1:-${ARMSX2_SWITCH2_MESA_SDK_ZIP:-${DEFAULT_DIST}/mesa-26.2.7-switch2-horizon-sdk.zip}}"
+ZIP="${1:-${ARMSX2_SWITCH2_MESA_SDK_ZIP:-${DEFAULT_DIST}/mesa-26.3.1-switch2-horizon-sdk.zip}}"
 OUT="${2:-${ARMSX2_SWITCH2_MESA_SDK_ROOT:-${ROOT}/switch/deps/switch2_mesa_sdk}}"
 DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 BIN="${DEVKITPRO}/devkitA64/bin"

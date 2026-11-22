@@ -47,7 +47,7 @@ fi
 
 cd "${ROOT}"
 bash "${ROOT}/switch/deps/prepare_mesa_sdk_switch2.sh" \
-	"${ARMSX2_SWITCH2_MESA_SDK_ZIP:-${ROOT}/../mesa-nx/dist/mesa-26.2.7-switch2-horizon-sdk.zip}" \
+	"${ARMSX2_SWITCH2_MESA_SDK_ZIP:-${ROOT}/../mesa-nx/dist/mesa-26.3.1-switch2-horizon-sdk.zip}" \
 	"${ROOT}/switch/deps/switch2_mesa_sdk"
 
 # (no precompiled headers: under MSYS2, CMake writes /c/... paths into them, which the native compiler cannot open)
