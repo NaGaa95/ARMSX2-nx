@@ -3,6 +3,13 @@
 
 #include "GS/Renderers/OpenGL/GLContext.h"
 #include "GS/Renderers/OpenGL/GSDeviceOGL.h"
+#ifdef __SWITCH__
+#include "GS/Renderers/OpenGL/GLContextEGLHorizon.h"
+#endif
+#ifdef __SWITCH2__
+#include "common/Horizon/Horizon.h"
+#include "nx2_platform.h"
+#endif
 #include "GS/Renderers/OpenGL/GLLibretro.h"
 #include "GS/Renderers/OpenGL/GLState.h"
 #include "GS/Renderers/Common/GSFramebufferFetchPolicy.h"
@@ -247,6 +254,17 @@ GSDeviceOGL::~GSDeviceOGL()
 std::vector<GSAdapterInfo> GSDeviceOGL::GetAdapterInfo()
 {
 	std::vector<GSAdapterInfo> ret;
+#ifdef __SWITCH__
+	// No probe context: the console's EGL display picks its driver once.
+	{
+		GSAdapterInfo ai;
+		ai.name = "OpenGL";
+		ai.max_texture_size = 16384;
+		ai.max_upscale_multiplier = GSGetMaxUpscaleMultiplier(ai.max_texture_size);
+		ret.emplace_back(std::move(ai));
+		return ret;
+	}
+#endif
 
 	// If OGL is currently active, query the live device directly.
 	if (g_gs_device && g_gs_device->GetRenderAPI() == RenderAPI::OpenGL)
@@ -345,6 +363,11 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	// GL is a pain and needs the window super early to create the context.
 	if (!AcquireWindow(true))
 		return false;
+#ifdef __SWITCH__
+	// The console's window, and the GL driver the renderer names: nvc0 for OpenGL, Zink over NVK for Zink.
+	GLContextEGLHorizon::FillWindowInfo(&m_window_info);
+	GLContextEGLHorizon::PrepareDriver(GSConfig.Renderer == GSRendererType::Zink);
+#endif
 
 	Error error;
 	m_gl_context = GLContext::Create(m_window_info, &error);
@@ -1701,6 +1724,9 @@ bool GSDeviceOGL::UpdateWindow()
 
 	if (!AcquireWindow(false))
 		return false;
+#ifdef __SWITCH__
+	GLContextEGLHorizon::FillWindowInfo(&m_window_info);
+#endif
 
 	if (!m_gl_context->ChangeSurface(m_window_info))
 	{
@@ -1734,6 +1760,10 @@ void GSDeviceOGL::ResizeWindow(u32 new_window_width, u32 new_window_height, floa
 	}
 
 	m_window_info.surface_scale = new_window_scale;
+#ifdef __SWITCH2__
+	// Docking changes the refresh rate, with or without a new size.
+	m_window_info.surface_refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
+#endif
 	if (m_window_info.type == WindowInfo::Type::Surfaceless ||
 		(m_window_info.surface_width == new_window_width &&
 			m_window_info.surface_height == new_window_height))
@@ -1743,6 +1773,9 @@ void GSDeviceOGL::ResizeWindow(u32 new_window_width, u32 new_window_height, floa
 
 	m_gl_context->ResizeSurface(new_window_width, new_window_height);
 	m_window_info = m_gl_context->GetWindowInfo();
+#ifdef __SWITCH2__
+	m_window_info.surface_refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
+#endif
 }
 
 bool GSDeviceOGL::SupportsExclusiveFullscreen() const

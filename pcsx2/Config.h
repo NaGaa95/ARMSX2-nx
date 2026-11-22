@@ -332,6 +332,9 @@ enum class GSRendererType : s8
 	// nothing were running, when GSRendererHW's real CPU logic is. pcsx2-gsrunner only
 	// (`-renderer nullhw`); deliberately not added to any Qt/ImGui renderer picker.
 	NullHW = 19,
+
+	// Switch 2: the OpenGL renderer on Zink over NVK (OGL is mesa-nx's nvc0 there).
+	Zink = 20,
 };
 
 enum class GSVSyncMode : u8

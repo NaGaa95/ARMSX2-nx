@@ -283,6 +283,7 @@ constexpr Translation s_text[] = {
     {"Preparing the emulator", "Préparation de l'émulateur", "Emulator wird vorbereitet", "Preparando el emulador", "Preparazione dell'emulatore", "A preparar o emulador", "正在准备模拟器", "正在準備模擬器"},
     {"Drako3D core", "Cœur Drako3D", "Drako3D-Kern", "Núcleo Drako3D", "Core Drako3D", "Núcleo Drako3D", "Drako3D 核心", "Drako3D 核心"},
     {"Vulkan core", "Cœur Vulkan", "Vulkan-Kern", "Núcleo Vulkan", "Core Vulkan", "Núcleo Vulkan", "Vulkan 核心", "Vulkan 核心"},
+    {"OpenGL core", "Cœur OpenGL", "OpenGL-Kern", "Núcleo OpenGL", "Core OpenGL", "Núcleo OpenGL", "OpenGL 核心", "OpenGL 核心"},
 };
 
 std::string SystemCode()

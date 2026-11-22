@@ -1,10 +1,11 @@
 # ARMSX2-nx launcher for the Switch 2 (kaiHEN): armsx2-nx2.nro, an SDL 2 game library that writes the cores' settings
 # (inis/PCSX2.ini) and chainloads the renderer's core. Built with libounce and the Switch 2 Mesa SDK's EGL.
 #
-#   make [CORE_DRAKO3D=<armsx2_drako3d.nro>] [CORE_VULKAN=<armsx2_vulkan.nro>] [SWITCH2_MESA_SDK=../deps/switch2_mesa_sdk]
+#   make [CORE_DRAKO3D=<armsx2_drako3d.nro>] [CORE_VULKAN=<armsx2_vulkan.nro>] [CORE_OPENGL=<armsx2_opengl.nro>]
+#        [SWITCH2_MESA_SDK=../deps/switch2_mesa_sdk]
 #
-# The cores (switch/build-switch2.sh drako3d and vulkan) travel in the NRO's romfs (emu/), with their SHA-256 for the
-# launcher's copy on the SD card: switch/build-switch2-all.sh builds both, then this.
+# The cores (switch/build-switch2.sh drako3d, vulkan and opengl) travel in the NRO's romfs (emu/), with their SHA-256
+# for the launcher's copy on the SD card: switch/build-switch2-all.sh builds the three, then this.
 .SUFFIXES:
 .DEFAULT_GOAL := all
 
@@ -34,6 +35,7 @@ ICON		:=	icon.jpg
 SWITCH2_MESA_SDK	?=	$(TOPDIR)/../deps/switch2_mesa_sdk
 CORE_DRAKO3D	?=	$(TOPDIR)/../../build-switch2-drako3d/switch/app/armsx2_drako3d.nro
 CORE_VULKAN	?=	$(TOPDIR)/../../build-switch2-vulkan/switch/app/armsx2_vulkan.nro
+CORE_OPENGL	?=	$(TOPDIR)/../../build-switch2-opengl/switch/app/armsx2_opengl.nro
 
 ARCH	:=	$(SWITCH2_CPU) -mtp=soft -fPIE
 LTOFLAGS	:=	-flto=auto -fuse-linker-plugin
@@ -102,15 +104,18 @@ ifneq ($(APP_TITLEID),)
 endif
 
 # The romfs: romfs/ (logo, icons) and the cores, each with emu/<core>.sha256.
-CORES		:=	$(wildcard $(CORE_DRAKO3D) $(CORE_VULKAN))
+CORES		:=	$(wildcard $(CORE_DRAKO3D) $(CORE_VULKAN) $(CORE_OPENGL))
 ifeq ($(strip $(CORES)),)
-$(error "No ARMSX2 core to embed: build one first (switch/build-switch2.sh drako3d or vulkan)")
+$(error "No ARMSX2 core to embed: build one first (switch/build-switch2.sh drako3d, vulkan or opengl)")
 endif
 ifeq ($(wildcard $(CORE_DRAKO3D)),)
 $(warning "No Drako3D core ($(CORE_DRAKO3D)): this launcher will not start games with the Drako3D renderer")
 endif
 ifeq ($(wildcard $(CORE_VULKAN)),)
 $(warning "No Vulkan core ($(CORE_VULKAN)): this launcher will not start games with the Vulkan renderer")
+endif
+ifeq ($(wildcard $(CORE_OPENGL)),)
+$(warning "No OpenGL core ($(CORE_OPENGL)): this launcher will not start games with the OpenGL and Zink renderers")
 endif
 STATIC_ROMFS	:=	$(patsubst romfs/%,$(ROMFS)/%,$(shell find romfs -type f))
 STAGED_CORES	:=	$(foreach core,$(CORES),$(ROMFS)/emu/$(notdir $(core)))
@@ -134,6 +139,11 @@ $(ROMFS)/emu/armsx2_drako3d.nro: $(CORE_DRAKO3D)
 	@cp -f $< $@
 
 $(ROMFS)/emu/armsx2_vulkan.nro: $(CORE_VULKAN)
+	@mkdir -p $(@D)
+	@echo staging $(notdir $<)
+	@cp -f $< $@
+
+$(ROMFS)/emu/armsx2_opengl.nro: $(CORE_OPENGL)
 	@mkdir -p $(@D)
 	@echo staging $(notdir $<)
 	@cp -f $< $@

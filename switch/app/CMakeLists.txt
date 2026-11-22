@@ -67,9 +67,10 @@ if(ARMSX2_DK3D)
 	target_link_libraries(yadokari PRIVATE ${ARMSX2_DK3D_LIBRARY})
 endif()
 
-if(USE_VULKAN)
+if(USE_VULKAN OR (NINTENDO_SWITCH2 AND USE_OPENGL))
 	if(NINTENDO_SWITCH2)
-		# mesa-nx's NVK, merged and localized by switch/deps/prepare_mesa_sdk_switch2.sh.
+		# mesa-nx (NVK; EGL with OpenGL on nvc0 and Zink), merged and localized by
+		# switch/deps/prepare_mesa_sdk_switch2.sh. By path: portlibs/switch2/lib has OunceVK's own libEGL.
 		target_sources(yadokari PRIVATE nvk_compat.cpp)
 		target_link_libraries(yadokari PRIVATE
 			"${SWITCH_MESA_SDK_ROOT}/lib/libmesa_local.a"

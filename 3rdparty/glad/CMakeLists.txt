@@ -5,7 +5,12 @@ add_library(glad
 )
 
 target_include_directories(glad PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(glad PRIVATE Threads::Threads "${CMAKE_DL_LIBS}")
+if(HORIZON)
+	target_link_libraries(glad PRIVATE Threads::Threads)
+	target_compile_definitions(glad PUBLIC EGL_NO_PLATFORM_SPECIFIC_TYPES)
+else()
+	target_link_libraries(glad PRIVATE Threads::Threads "${CMAKE_DL_LIBS}")
+endif()
 
 if(WIN32)
 	target_sources(glad PRIVATE

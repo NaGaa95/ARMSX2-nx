@@ -422,6 +422,8 @@ GSRendererType GSUtil::GetPreferredRenderer()
 		preferred_renderer = D3D::GetPreferredRenderer();
 #elif defined(ARMSX2_DK3D)
 		preferred_renderer = GSRendererType::DK3D;
+#elif defined(__SWITCH__) && !defined(ENABLE_VULKAN)
+		preferred_renderer = GSRendererType::OGL;
 #elif defined(__SWITCH__)
 		preferred_renderer = GSRendererType::VK;
 #elif defined(__ANDROID__)

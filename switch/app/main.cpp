@@ -246,14 +246,19 @@ namespace
 #ifdef __SWITCH2__
 		// Each core has one GPU driver: the other core's renderer falls back to this core's (Software and Auto stay).
 		{
-#ifdef ARMSX2_DK3D
+#if defined(ARMSX2_DK3D)
 			constexpr int native_renderer = static_cast<int>(GSRendererType::DK3D);
-#else
+			constexpr int other_native_renderer = native_renderer;
+#elif defined(ENABLE_VULKAN)
 			constexpr int native_renderer = static_cast<int>(GSRendererType::VK);
+			constexpr int other_native_renderer = native_renderer;
+#else
+			constexpr int native_renderer = static_cast<int>(GSRendererType::OGL);
+			constexpr int other_native_renderer = static_cast<int>(GSRendererType::Zink);
 #endif
 			const int renderer = Host::GetIntSettingValue("EmuCore/GS", "Renderer", static_cast<int>(GSRendererType::Auto));
-			if (renderer != native_renderer && renderer != static_cast<int>(GSRendererType::Auto) &&
-				renderer != static_cast<int>(GSRendererType::SW))
+			if (renderer != native_renderer && renderer != other_native_renderer &&
+				renderer != static_cast<int>(GSRendererType::Auto) && renderer != static_cast<int>(GSRendererType::SW))
 			{
 				WARNING_LOG("Renderer {} is not in this core: using {}", renderer, native_renderer);
 				s_settings_interface->SetIntValue("EmuCore/GS", "Renderer", native_renderer);

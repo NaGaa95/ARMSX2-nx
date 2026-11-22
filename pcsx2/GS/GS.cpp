@@ -136,6 +136,9 @@ static RenderAPI GetAPIForRenderer(GSRendererType renderer)
 			return RenderAPI::None;
 
 		case GSRendererType::OGL:
+#ifdef __SWITCH2__
+		case GSRendererType::Zink:
+#endif
 			return RenderAPI::OpenGL;
 
 		case GSRendererType::VK:
@@ -1086,6 +1089,9 @@ std::vector<GSAdapterInfo> GSGetAdapterInfo(GSRendererType renderer)
 
 #ifdef ENABLE_OPENGL
 		case GSRendererType::OGL:
+#ifdef __SWITCH2__
+		case GSRendererType::Zink:
+#endif
 		{
 			ret = GSDeviceOGL::GetAdapterInfo();
 		}

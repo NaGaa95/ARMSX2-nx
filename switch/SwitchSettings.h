@@ -75,7 +75,9 @@ inline constexpr ClampMode CLAMP_MODES[] = {
   {"Wrapper/VU1ClampMode","vu1Overflow","vu1ExtraOverflow","vu1SignOverflow"},
 };
 
-inline constexpr Choice C_backend[]  = { {"Drako3D (native)","18"}, {"Vulkan (NVK)","14"} };
+// Each renderer's core: Drako3D, Vulkan, or the OpenGL core (OpenGL on nvc0, or on Zink over NVK).
+inline constexpr Choice C_backend[]  = { {"Drako3D (native)","18"}, {"Vulkan (NVK)","14"},
+                                     {"OpenGL (NVC0)","12"}, {"OpenGL (Zink/NVK)","20"} };
 inline constexpr Choice C_upscale[]  = { {"1x (native ~480p)","1"},{"1.5x","1.5"},{"2x (~720p)","2"},{"2.5x","2.5"},
                                      {"3x (~1080p)","3"},{"4x (~1440p)","4"},{"5x (~1800p)","5"},{"6x (4K ~2160p)","6"} };
 inline constexpr Choice C_bool[]     = { {"Off","false"}, {"On","true"} };

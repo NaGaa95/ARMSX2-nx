@@ -61,12 +61,14 @@ endif()
 
 # The Switch's native GS renderer: deko3d on the Switch, drako3d (deko3d's API on the Ampere GPU) on the Switch 2.
 # The Switch 2 builds one core per GPU driver, since drako3d cannot open the GPU after Mesa ran in the same program:
-# ARMSX2_SWITCH2_RENDERER is drako3d (DK3D) or vulkan (Mesa's NVK, from mesa-nx).
+# ARMSX2_SWITCH2_RENDERER is drako3d (DK3D), vulkan (Mesa's NVK, from mesa-nx) or opengl (mesa-nx's OpenGL on nvc0, or
+# on Zink over NVK: a program uses nvc0 or Vulkan, not both).
 set(ARMSX2_DK3D OFF)
 if(HORIZON)
 	if(NINTENDO_SWITCH2)
-		set(ARMSX2_SWITCH2_RENDERER "drako3d" CACHE STRING "Switch 2 core GPU driver: drako3d or vulkan")
-		set_property(CACHE ARMSX2_SWITCH2_RENDERER PROPERTY STRINGS drako3d vulkan)
+		set(ARMSX2_SWITCH2_RENDERER "drako3d" CACHE STRING "Switch 2 core GPU driver: drako3d, vulkan or opengl")
+		set_property(CACHE ARMSX2_SWITCH2_RENDERER PROPERTY STRINGS drako3d vulkan opengl)
+		set(USE_OPENGL OFF CACHE BOOL "Enable OpenGL GS renderer" FORCE)
 		if(ARMSX2_SWITCH2_RENDERER STREQUAL "drako3d")
 			set(ARMSX2_DK3D ON)
 			set(USE_VULKAN OFF CACHE BOOL "Enable Vulkan GS renderer" FORCE)
@@ -76,8 +78,11 @@ if(HORIZON)
 			endif()
 		elseif(ARMSX2_SWITCH2_RENDERER STREQUAL "vulkan")
 			set(USE_VULKAN ON CACHE BOOL "Enable Vulkan GS renderer" FORCE)
+		elseif(ARMSX2_SWITCH2_RENDERER STREQUAL "opengl")
+			set(USE_VULKAN OFF CACHE BOOL "Enable Vulkan GS renderer" FORCE)
+			set(USE_OPENGL ON CACHE BOOL "Enable OpenGL GS renderer" FORCE)
 		else()
-			message(FATAL_ERROR "ARMSX2_SWITCH2_RENDERER must be drako3d or vulkan, not '${ARMSX2_SWITCH2_RENDERER}'")
+			message(FATAL_ERROR "ARMSX2_SWITCH2_RENDERER must be drako3d, vulkan or opengl, not '${ARMSX2_SWITCH2_RENDERER}'")
 		endif()
 	else()
 		set(ARMSX2_DK3D ON)

@@ -831,9 +831,15 @@ if(USE_OPENGL)
 		# window of its own - but it still needs the EGL context class, because
 		# the context it renders on is an EGL one shared with the frontend's.
 		# (Android adds the same file further down, and CMake drops the repeat.)
-		if(X11_API OR WAYLAND_API OR ENABLE_LIBRETRO)
+		if(X11_API OR WAYLAND_API OR ENABLE_LIBRETRO OR HORIZON)
 			list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextEGL.cpp)
 			list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextEGL.h)
+		endif()
+
+		if(HORIZON)
+			# mesa-nx's EGL on the console's window (switch/app links libmesa_local.a).
+			list(APPEND pcsx2GSSources GS/Renderers/OpenGL/GLContextEGLHorizon.cpp)
+			list(APPEND pcsx2GSHeaders GS/Renderers/OpenGL/GLContextEGLHorizon.h)
 		endif()
 
 		if(X11_API)

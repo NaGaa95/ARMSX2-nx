@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Builds one Switch 2 (kaiHEN) core NRO: armsx2_drako3d.nro (the DK3D renderer on drako3d) or armsx2_vulkan.nro
-# (the Vulkan renderer on mesa-nx's NVK). One core per GPU driver: drako3d cannot open the GPU after Mesa ran in the
-# same program. Needs ounce-devkit (libounce, drako3d, uam2) in $DEVKITPRO; run it from MSYS2's bash.
+# Builds one Switch 2 (kaiHEN) core NRO: armsx2_drako3d.nro (the DK3D renderer on drako3d), armsx2_vulkan.nro (the
+# Vulkan renderer on mesa-nx's NVK) or armsx2_opengl.nro (the OpenGL renderer on mesa-nx's nvc0, or on Zink over NVK).
+# One core per GPU driver: drako3d cannot open the GPU after Mesa ran in the same program, and nvc0 and Vulkan share
+# one GPU channel. Needs ounce-devkit (libounce, drako3d, uam2) in $DEVKITPRO; run it from MSYS2's bash.
 #
-# Usage: switch/build-switch2.sh drako3d|vulkan
+# Usage: switch/build-switch2.sh drako3d|vulkan|opengl
 # Environment: BUILD_JOBS (all cores), ARMSX2_VERSION (1.0.0), SWITCH2_BUILD_DIR (build-switch2-<renderer>),
-#              ARMSX2_SWITCH2_MESA_SDK_ZIP (mesa-nx's Switch 2 SDK zip: NVK, and uam2rt for frame generation).
+#              ARMSX2_SWITCH2_MESA_SDK_ZIP (mesa-nx's Switch 2 SDK zip: NVK, EGL and OpenGL, and uam2rt for frame
+#              generation).
 set -euo pipefail
 
 # MSYS2's cmake and ninja (devkitPro's CMake files refuse others, such as a CLANGARM64 shell's).
@@ -15,8 +17,8 @@ export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RENDERER="${1:-drako3d}"
 case "${RENDERER}" in
-	drako3d|vulkan) ;;
-	*) echo "usage: $0 drako3d|vulkan" >&2; exit 2 ;;
+	drako3d|vulkan|opengl) ;;
+	*) echo "usage: $0 drako3d|vulkan|opengl" >&2; exit 2 ;;
 esac
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 ARMSX2_VERSION="${ARMSX2_VERSION:-1.0.0}"

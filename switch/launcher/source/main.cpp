@@ -499,7 +499,7 @@ static const SettingHelpEntry SETTING_HELP[] = {
   {FRAMEGEN_120HZ_KEY, "Frame generation",
    "Docked, switches the output to 120 Hz (1440p or 1080p, the TV's 120 Hz mode) so that frame generation doubles 50/60 FPS games to 120. It is used only while the game runs at 50/60 FPS. Off, the output stays at the TV's resolution (up to 4K at 60 Hz) and frame generation doubles 30 FPS games only. Handheld always runs at 120 Hz."},
   {"EmuCore/GS/Renderer", "Graphics backend",
-   "Chooses the core the game runs in. Drako3D renders PS2 GS draws natively on the Switch 2 GPU; Vulkan runs PCSX2's Vulkan renderer on mesa-nx's NVK driver. Each renderer is its own emulator program, started by the launcher."},
+   "Chooses the core the game runs in. Drako3D renders PS2 GS draws natively on the Switch 2 GPU; Vulkan runs PCSX2's Vulkan renderer on mesa-nx's NVK driver; OpenGL runs PCSX2's OpenGL renderer on mesa-nx's NVC0 driver, or on Zink over NVK. Each renderer's core is its own program, started by the launcher. Frame generation works with Vulkan and Drako3D."},
   {"EmuCore/GS/upscale_multiplier", "Resolution / performance",
    "Sets the internal resolution used for 3D rendering. Higher scales improve clarity but increase GPU load. Pre-rendered FMV resolution does not change."},
   {"EmuCore/GS/AspectRatio", "Display geometry",
@@ -5691,17 +5691,28 @@ static bool prepareLaunch(const std::string &key,const std::string &pathKey,cons
     const char *api=storeGet(*store,"DEV9/Eth/EthApi",nullptr);
     if(api&&strcmp(api,"Sockets")!=0&&strcmp(api,"Local Link")!=0) storeSet(*store,"DEV9/Eth/EthApi","Sockets");
   }
-  const bool vulkan=!strcmp(storeGet(overrides,RENDERER_KEY,storeGet(effective,RENDERER_KEY,"18")),"14");
-  storeSet(overrides,RENDERER_KEY,vulkan?"14":"18");
+  // The renderer picks the core: Vulkan (14), OpenGL on nvc0 (12) or Zink (20), Drako3D (18) for anything else.
+  std::string renderer=storeGet(overrides,RENDERER_KEY,storeGet(effective,RENDERER_KEY,"18"));
+  if(renderer!="14"&&renderer!="12"&&renderer!="20") renderer="18";
+  storeSet(overrides,RENDERER_KEY,renderer.c_str());
+  const bool vulkan=renderer=="14";
+  const bool opengl=renderer=="12"||renderer=="20";
+  // LSFG 2x runs on Vulkan and Drako3D only.
+  if(opengl){
+    storeSet(effective,FRAMEGEN_KEY,"false");
+    storeSet(overrides,FRAMEGEN_KEY,"false");
+    lsfgMissing=false;
+  }
 
-  const char *core=vulkan?"armsx2_vulkan":"armsx2_drako3d";
+  const char *core=vulkan?"armsx2_vulkan":opengl?"armsx2_opengl":"armsx2_drako3d";
   emulatorNro=std::string(EMU_HOST_DIR)+"/"+core+".nro";
-  launcherLog("renderer %s, core %s",vulkan?"Vulkan":"Drako3D",emulatorNro.c_str());
+  launcherLog("renderer %s, core %s",renderer=="14"?"Vulkan":renderer=="12"?"OpenGL (nvc0)":renderer=="20"?"OpenGL (Zink)":"Drako3D",
+              emulatorNro.c_str());
   const std::string source=std::string("romfs:/emu/")+core+".nro";
   nx2SetCpuBoost(true);
   g_setupTotal=setupFileBytes(source.c_str());
   g_setupDone=0; g_setupPct=-1; g_setupAborted=false;
-  g_setupDetail=uiText(vulkan?"Vulkan core":"Drako3D core");
+  g_setupDetail=uiText(vulkan?"Vulkan core":opengl?"OpenGL core":"Drako3D core");
   const bool haveEmulator=ensureEmu(core);
   g_setupDone=std::max(g_setupDone,g_setupTotal);
   if(g_setupPct>=0) setupTick(0);   // land on 100% before the screen goes away

@@ -17,6 +17,11 @@
 static DynamicLibrary s_egl_library;
 static std::atomic_uint32_t s_egl_refcount = 0;
 
+#ifdef __SWITCH__
+// glad/egl.h defines eglGetProcAddress to its own pointer: this names mesa-nx's function (libmesa_local.a).
+extern "C" void* ArmsxMesaEglGetProcAddress(const char* name) __asm__("eglGetProcAddress");
+#endif
+
 // ANGLE integration (ported from sashkinbro/EmuCoreX): when the app wants to run the
 // OpenGL renderer through ANGLE's GLES-on-Vulkan translation (Android only, driven by
 // the AndroidUseAngleOpenGL setting), the Kotlin side sets ARMSX2_ANGLE_EGL_LIBRARY to
@@ -43,6 +48,9 @@ static bool TryLoadEGLFromOverride(Error* error)
 
 static bool LoadEGL()
 {
+#ifdef __SWITCH__
+	return true;
+#endif
 	// We're not going to be calling this from multiple threads concurrently.
 	// So, not wrapping this in a mutex should be fine.
 	if (s_egl_refcount.fetch_add(1, std::memory_order_acq_rel) == 0)
@@ -71,6 +79,9 @@ static bool LoadEGL()
 
 static void UnloadEGL()
 {
+#ifdef __SWITCH__
+	return;
+#endif
 	pxAssert(s_egl_refcount.load(std::memory_order_acquire) > 0);
 	if (s_egl_refcount.fetch_sub(1, std::memory_order_acq_rel) == 1)
 	{
@@ -81,8 +92,13 @@ static void UnloadEGL()
 
 static bool LoadGLADEGL(EGLDisplay display, Error* error)
 {
+#ifdef __SWITCH__
+	const int version =
+		gladLoadEGL(display, [](const char* name) { return reinterpret_cast<GLADapiproc>(ArmsxMesaEglGetProcAddress(name)); });
+#else
 	const int version =
 		gladLoadEGL(display, [](const char* name) { return (GLADapiproc)s_egl_library.GetSymbolAddress(name); });
+#endif
 	if (version == 0)
 	{
 		Error::SetStringView(error, "Loading GLAD EGL functions failed");

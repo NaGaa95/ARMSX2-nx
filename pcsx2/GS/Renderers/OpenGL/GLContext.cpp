@@ -19,6 +19,9 @@
 #include "GS/Renderers/OpenGL/GLContextEGL.h"
 #endif
 #endif
+#ifdef __SWITCH__
+#include "GS/Renderers/OpenGL/GLContextEGLHorizon.h"
+#endif
 
 #include "common/Console.h"
 #include "common/Error.h"
@@ -136,6 +139,10 @@ std::unique_ptr<GLContext> GLContext::Create(const WindowInfo& wi, Error* error)
 #ifdef WAYLAND_API
 	if (!context && wi.type == WindowInfo::Type::Wayland)
 		context = GLContextEGLWayland::Create(wi, std::span<const Version>(versions_to_try, num_versions_to_try), error);
+#endif
+#ifdef __SWITCH__
+	if (!context && (wi.type == WindowInfo::Type::VI || wi.type == WindowInfo::Type::Surfaceless))
+		context = GLContextEGLHorizon::Create(wi, std::span<const Version>(versions_to_try, num_versions_to_try), error);
 #endif
 // GLContextEGL.cpp is built only alongside a window system or libretro (pcsx2/CMakeLists.txt).
 #if !defined(__ANDROID__) && (defined(X11_API) || defined(WAYLAND_API) || defined(ENABLE_LIBRETRO))
