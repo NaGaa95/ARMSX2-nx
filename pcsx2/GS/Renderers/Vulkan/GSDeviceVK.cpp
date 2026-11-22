@@ -80,6 +80,11 @@ namespace
 
 #ifdef __SWITCH2__
 #include "nx2_platform.h"
+#include "switch/lsfg/SwitchLSFG.h"
+#include "switch/lsfg/SwitchLSFGVulkan.h"
+
+// LSFG 2x needs timeline semaphores, an extension at PCSX2's Vulkan 1.1.
+static bool s_lsfg_timeline_semaphores = false;
 #endif
 
 #include "imgui.h"
@@ -650,6 +655,10 @@ bool GSDeviceVK::SelectDeviceExtensions(ExtensionList* extension_list)
 #endif
 
 	m_optional_extensions.vk_ext_fragment_shader_interlock = SupportsExtension(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, false);
+#ifdef __SWITCH2__
+	s_lsfg_timeline_semaphores =
+		SwitchLSFG_WantsTimelineSemaphores() && SupportsExtension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME, false);
+#endif
 	// LSFG frame generation only. PCSX2 targets Vulkan 1.1, where neither is core — the memory
 	// model is 1.2 and nullDescriptor never became core at all — so both come in as extensions.
 	m_optional_extensions.vk_khr_vulkan_memory_model = SupportsExtension(VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME, false);
@@ -1084,6 +1093,12 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 		Vulkan::AddPointerToChain(&device_info, &descriptor_indexing_feature);
 	}
 
+#ifdef __SWITCH2__
+	VkPhysicalDeviceTimelineSemaphoreFeatures lsfg_timeline_feature{};
+	if (SwitchLSFG_PrepareDeviceFeatures(m_physical_device, s_lsfg_timeline_semaphores, lsfg_timeline_feature))
+		Vulkan::AddPointerToChain(&device_info, &lsfg_timeline_feature);
+#endif
+
 	VkResult res = vkCreateDevice(m_physical_device, &device_info, nullptr, &m_device);
 	if (res != VK_SUCCESS)
 	{
@@ -1101,6 +1116,10 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 	vkGetDeviceQueue(m_device, m_graphics_queue_family_index, 0, &m_graphics_queue);
 	if (m_window_system.type != WindowInfo::Type::Surfaceless)
 		vkGetDeviceQueue(m_device, m_present_queue_family_index, 0, &m_present_queue);
+#ifdef __SWITCH2__
+	SwitchLSFG_SetDevice(m_instance, m_physical_device, m_device, m_present_queue, m_present_queue_family_index,
+		vkGetInstanceProcAddr);
+#endif
 	m_spinning_supported = m_spin_queue_family_index != queue_family_count &&
 	                       queue_family_properties[m_graphics_queue_family_index].timestampValidBits > 0 &&
 	                       m_device_properties.limits.timestampPeriod > 0;
@@ -2219,7 +2238,11 @@ void GSDeviceVK::SubmitCommandBuffer(VKSwapChain* present_swap_chain)
 
 		const bool stats = VKSwapChain::IsPresentStatsEnabled();
 		const Common::Timer::Value t_present_start = stats ? Common::Timer::GetCurrentValue() : 0;
-		res = vkQueuePresentKHR(m_present_queue, &present_info);
+#ifdef __SWITCH2__
+		// LSFG 2x presents the generated frame, then the real one.
+		if (!SwitchLSFG_Present(m_present_queue, present_info, res))
+#endif
+			res = vkQueuePresentKHR(m_present_queue, &present_info);
 		if (stats)
 		{
 			const double present_elapsed_ms =
@@ -3358,6 +3381,9 @@ void GSDeviceVK::Destroy()
 	// The negotiated device belongs to the libretro frontend (it made the
 	// vkCreateDevice call) and it destroys it after context_destroy —
 	// destroying it here would leave the frontend tearing down a dead device.
+#ifdef __SWITCH2__
+	SwitchLSFG_ResetDevice();
+#endif
 	if (m_device != VK_NULL_HANDLE)
 		if (!(VKLibretro::Active && VKLibretro::Init.device == m_device))
 			vkDestroyDevice(m_device, nullptr);
@@ -3429,10 +3455,6 @@ bool GSDeviceVK::UpdateWindow()
 		Console.Error("VK: Failed to create swap chain");
 		return false;
 	}
-#ifdef __SWITCH2__
-	// (Mesa set its own swap interval on the new swapchain: back to the console's pacing, 120 Hz VRR handheld)
-	nx2DisplayReapply();
-#endif
 
 	m_window_info = m_swap_chain->GetWindowInfo();
 	RenderBlankFrame();
@@ -4031,6 +4053,8 @@ bool GSDeviceVK::CreateDeviceAndSwapChain()
 	m_window_info.surface_refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
 	// The launcher ran Mesa earlier in this process: get a usable GPU device back.
 	nx2MesaGpuRecover();
+	// Before vkCreateInstance, which reads NVK_DEBUG: LSFG adds no_cbuf to it.
+	SwitchLSFG_Configure(false);
 #else
 	m_window_info.surface_width = 1280;
 	m_window_info.surface_height = 720;
@@ -4175,10 +4199,6 @@ bool GSDeviceVK::CreateDeviceAndSwapChain()
 			ERROR_LOG("Failed to create swap chain");
 			return false;
 		}
-#ifdef __SWITCH2__
-		// (Mesa set its own swap interval on the new swapchain: back to the console's pacing, 120 Hz VRR handheld)
-		nx2DisplayReapply();
-#endif
 
 		// NOTE: This is assigned afterwards, because some platforms can modify the window info (e.g. Metal).
 		m_window_info = m_swap_chain->GetWindowInfo();

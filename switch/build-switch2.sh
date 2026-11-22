@@ -5,7 +5,7 @@
 #
 # Usage: switch/build-switch2.sh drako3d|vulkan
 # Environment: BUILD_JOBS (all cores), ARMSX2_VERSION (1.0.0), SWITCH2_BUILD_DIR (build-switch2-<renderer>),
-#              ARMSX2_SWITCH2_MESA_SDK_ZIP (mesa-nx's Switch 2 SDK zip, for the Vulkan core).
+#              ARMSX2_SWITCH2_MESA_SDK_ZIP (mesa-nx's Switch 2 SDK zip: NVK, and uam2rt for frame generation).
 set -euo pipefail
 
 # MSYS2's cmake and ninja (devkitPro's CMake files refuse others, such as a CLANGARM64 shell's).
@@ -44,11 +44,9 @@ else
 fi
 
 cd "${ROOT}"
-if [[ "${RENDERER}" == vulkan ]]; then
-	bash "${ROOT}/switch/deps/prepare_mesa_sdk_switch2.sh" \
-		"${ARMSX2_SWITCH2_MESA_SDK_ZIP:-${ROOT}/../mesa-nx/dist/mesa-26.2.7-switch2-horizon-sdk.zip}" \
-		"${ROOT}/switch/deps/switch2_mesa_sdk"
-fi
+bash "${ROOT}/switch/deps/prepare_mesa_sdk_switch2.sh" \
+	"${ARMSX2_SWITCH2_MESA_SDK_ZIP:-${ROOT}/../mesa-nx/dist/mesa-26.2.7-switch2-horizon-sdk.zip}" \
+	"${ROOT}/switch/deps/switch2_mesa_sdk"
 
 # (no precompiled headers: under MSYS2, CMake writes /c/... paths into them, which the native compiler cannot open)
 cmake -S . -B "${BUILD_PATH}" -G Ninja \

@@ -12,7 +12,8 @@ namespace SwitchSettings
 {
 inline constexpr char CPU_BOOST_KEY[] = "Switch/KeepCpuBoost";
 
-enum OType { OT_CHOICE, OT_RANGE, OT_SCALED_RANGE, OT_SUBMENU, OT_TEXT, OT_FILE };
+// OT_STATUS: a line the launcher fills in (Lossless.dll installed or missing), no setting of its own.
+enum OType { OT_CHOICE, OT_RANGE, OT_SCALED_RANGE, OT_SUBMENU, OT_TEXT, OT_FILE, OT_STATUS };
 struct Choice { const char *label, *val; };
 struct Opt {
   const char *label;
@@ -43,6 +44,8 @@ struct Opt {
 #define O_BOOL(l,k,d) O_CHOICE(l,k,C_bool,d)
 #define O_BOOLG(l,k,d,gk,go) O_CHOICEG(l,k,C_bool,d,gk,go)
 #define O_BOOT(l,k,c,d) { l, k, OT_CHOICE, c, (int)(sizeof(c)/sizeof(*c)), 0,0,0, d, 0, nullptr, nullptr, 1, nullptr, false }
+#define O_BOOTG(l,k,c,d,gk,go) { l, k, OT_CHOICE, c, (int)(sizeof(c)/sizeof(*c)), 0,0,0, d, 0, gk, go, 1, nullptr, false }
+#define O_STATUS(l) { l, nullptr, OT_STATUS, nullptr,0, 0,0,0, nullptr, 0, nullptr, nullptr, 1, nullptr, false }
 #define O_TEXTG(l,k,d,gk,go) { l, k, OT_TEXT, nullptr,0, 0,0,0, d, 0, gk, go, 1, nullptr, false }
 #define O_FILEG(l,k,d,x,gk,go) { l, k, OT_FILE, nullptr,0, 0,0,0, d, 0, gk, go, 1, nullptr, false, nullptr, x }
 #define O_FILE(l,k,d,x) O_FILEG(l,k,d,x,nullptr,nullptr)
@@ -57,6 +60,11 @@ inline constexpr char GS_BACK_THREAD_KEY[] = "EmuCore/GS/GSBackThreadMode";
 inline constexpr char ETHERNET_KEY[] = "DEV9/Eth/EthEnable";
 inline constexpr char HDD_KEY[] = "DEV9/Hdd/HddEnable";
 inline constexpr char CHEATS_KEY[] = "EmuCore/EnableCheats";
+// LSFG 2x (switch/lsfg): prepared at launch here, turned on for the session from the quick menu.
+inline constexpr char FRAMEGEN_KEY[] = "Switch/FrameGeneration";
+inline constexpr char FRAMEGEN_FLOW_KEY[] = "Switch/FrameGenerationFlowScale";
+inline constexpr char FRAMEGEN_PERFORMANCE_KEY[] = "Switch/FrameGenerationPerformance";
+inline constexpr char FRAMEGEN_120HZ_KEY[] = "Switch/FrameGeneration120Hz";
 inline constexpr char PATCHES_KEY[] = "EmuCore/EnablePatches";
 
 inline constexpr char RECOMPILER_SECTION[] = "EmuCore/CPU/Recompiler";
@@ -151,6 +159,7 @@ inline constexpr Choice C_achievements_position[] = {{"Top left","0"}, {"Top cen
 // "Unset" is the core's default; sockets need no host adapter.
 inline constexpr Choice C_network[] = {{"Sockets","Sockets"}, {"Local Link","Local Link"}};
 inline constexpr Choice C_dns[] = {{"Manual","Manual"}, {"Automatic","Auto"}, {"Internal","Internal"}};
+inline constexpr Choice C_flow[] = {{"Quarter resolution","0.25"}, {"Half resolution","0.5"}, {"Full resolution","1"}};
 inline constexpr Choice C_launcherLanguage[] = {
   {"System", "system"}, {"English", "en"}, {"Français", "fr"},
   {"Deutsch", "de"}, {"Español", "es"}, {"Italiano", "it"}, {"Português", "pt"},
@@ -162,7 +171,7 @@ inline constexpr Choice C_gridRows[] = { {"1","1"}, {"2","2"}, {"3","3"} };
 
 enum { SCR_GRAPHICS, SCR_DISPLAY, SCR_OSD, SCR_ENHANCE, SCR_GS_FIXES, SCR_AUDIO, SCR_EMU, SCR_ADVANCED,
        SCR_GAMEFIXES, SCR_FRAMERATE, SCR_CONTROLLER, SCR_SYSTEM, SCR_POST, SCR_TEXTURES, SCR_GS_ADVANCED,
-       SCR_CPU, SCR_PAD1, SCR_PAD2, SCR_BOOT, SCR_NETWORK, SCR_RA_ADVANCED, SCR_COUNT };
+       SCR_CPU, SCR_PAD1, SCR_PAD2, SCR_BOOT, SCR_NETWORK, SCR_RA_ADVANCED, SCR_FRAMEGEN, SCR_COUNT };
 
 inline constexpr char UPSCALE_KEY[] = "EmuCore/GS/upscale_multiplier";
 inline constexpr Opt S_graphics[] = {
@@ -489,6 +498,14 @@ inline constexpr Opt S_ra_advanced[] = {
   O_BOOLG("Achievement unlock sound", "Achievements/UnlockSound", "true", "Achievements/SoundEffects", "false"),
   O_BOOLG("Leaderboard submission sound", "Achievements/LBSubmitSound", "true", "Achievements/SoundEffects", "false"),
 };
+// The same page as the user's other ports (PPSSPP-nx, Cemu-nx, Dolphin-nx, Vita3K-nx).
+inline constexpr Opt S_framegen[] = {
+  O_BOOT("LSFG 2x (Vulkan / Drako3D)", FRAMEGEN_KEY, C_bool, "false"),
+  O_BOOTG("Flow resolution", FRAMEGEN_FLOW_KEY, C_flow, "0.5", FRAMEGEN_KEY, "false"),
+  O_BOOTG("Performance mode", FRAMEGEN_PERFORMANCE_KEY, C_bool, "true", FRAMEGEN_KEY, "false"),
+  O_BOOTG("120 Hz Docked Mode", FRAMEGEN_120HZ_KEY, C_bool, "false", FRAMEGEN_KEY, "false"),
+  O_STATUS("Lossless.dll"),
+};
 inline constexpr Opt S_launcher[] = {
   O_CHOICE("Language",          "Wrapper/Language",       C_launcherLanguage, "system"),
   O_CHOICE("Theme",             "Wrapper/Theme",          C_launcherTheme, "animated"),
@@ -534,6 +551,7 @@ inline constexpr Screen g_screens[SCR_COUNT] = {
   MakeScreen("BIOS and boot", S_boot),
   MakeScreen("Network and HDD", S_network),
   MakeScreen("Achievement options", S_ra_advanced),
+  MakeScreen("Frame generation", S_framegen),
 };
 
 #undef O_CHOICE
@@ -546,6 +564,8 @@ inline constexpr Screen g_screens[SCR_COUNT] = {
 #undef O_BOOL
 #undef O_BOOLG
 #undef O_BOOT
+#undef O_BOOTG
+#undef O_STATUS
 #undef O_TEXTG
 #undef O_FILEG
 #undef O_FILE

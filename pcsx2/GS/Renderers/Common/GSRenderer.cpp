@@ -3,6 +3,7 @@
 
 #ifdef __SWITCH2__
 #include "ImGui/SwitchQuickMenu.h"
+#include "switch/lsfg/SwitchLSFG.h"
 #else
 #include "ImGui/FullscreenUI.h"
 #endif
@@ -1145,7 +1146,12 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 	const bool fb_sprite_frame = (fb_sprite_blits > 0);
 
 	bool skip_frame = false;
+#ifdef __SWITCH2__
+	// LSFG 2x interpolates between unique frames: a 30 FPS game's repeated presents would read as 60 FPS.
+	if (GSConfig.SkipDuplicateFrames || SwitchLSFG_IsEnabled())
+#else
 	if (GSConfig.SkipDuplicateFrames)
+#endif
 	{
 		bool is_unique_frame;
 		switch (PerformanceMetrics::GetInternalFPSMethod())

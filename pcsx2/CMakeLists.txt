@@ -1979,6 +1979,25 @@ if(ARMSX2_DK3D AND NINTENDO_SWITCH2)
 	target_include_directories(PCSX2_FLAGS BEFORE INTERFACE "${CMAKE_SOURCE_DIR}/switch/drako3d")
 endif()
 
+if(NINTENDO_SWITCH2)
+	# LSFG 2x frame generation (switch/lsfg): the control here, the third-party parts in their own libraries.
+	target_sources(PCSX2 PRIVATE
+		"${CMAKE_SOURCE_DIR}/switch/lsfg/SwitchLSFG.cpp"
+		"${CMAKE_SOURCE_DIR}/switch/lsfg/SwitchLSFG.h")
+	if(USE_VULKAN)
+		target_sources(PCSX2 PRIVATE
+			"${CMAKE_SOURCE_DIR}/switch/lsfg/SwitchLSFGVulkan.cpp"
+			"${CMAKE_SOURCE_DIR}/switch/lsfg/SwitchLSFGVulkan.h")
+	endif()
+	add_subdirectory("${CMAKE_SOURCE_DIR}/switch/lsfg" "${CMAKE_BINARY_DIR}/switch/lsfg")
+	if(USE_VULKAN)
+		target_link_libraries(PCSX2_FLAGS INTERFACE SwitchLsfgVulkan)
+	endif()
+	if(ARMSX2_DK3D)
+		target_link_libraries(PCSX2_FLAGS INTERFACE SwitchLsfgDeko)
+	endif()
+endif()
+
 if(WIN32)
 	target_link_libraries(PCSX2_FLAGS INTERFACE
 		WIL::WIL

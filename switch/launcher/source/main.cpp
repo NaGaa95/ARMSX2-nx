@@ -67,6 +67,9 @@ static const char *GAMECFG_DIR = "sdmc:/switch/armsx2-nx/gamecfg";
 static const char *DEF_GAMEDIR = "sdmc:/switch/armsx2-nx/games";
 static const char *BIOS_DIR    = "sdmc:/switch/armsx2-nx/bios";
 static const char *MEMCARDS_DIR= "sdmc:/switch/armsx2-nx/memcards";
+// Frame generation's shaders come from the user's own Lossless.dll (Lossless Scaling), copied here.
+static const char *LSFG_DIR    = "sdmc:/switch/armsx2-nx/lsfg";
+static const char *LSFG_DLL    = "sdmc:/switch/armsx2-nx/lsfg/Lossless.dll";
 static const char *EMU_HOST_DIR= "sdmc:/switch/armsx2-nx/.emu";
 static const char *LAUNCHER_NRO= "sdmc:/switch/armsx2-nx2.nro";
 static std::string g_launcherNroPath = LAUNCHER_NRO;
@@ -314,11 +317,8 @@ static bool storeSave(Store &s, const char *path) {
 using namespace SwitchSettings;
 
 static bool emulatorSettingsKey(const std::string &key) {
-#ifdef __SWITCH2__
-  if(key==CPU_BOOST_KEY) return true;
-#endif
   static const char *const sections[]={"EmuCore","SPU2","Framerate","Achievements","Pad1","Pad2","MemoryCards",
-                                       "Logging","Filenames","DEV9"};
+                                       "Logging","Filenames","DEV9","Switch"};
   for(const char *section:sections){
     const size_t length=strlen(section);
     if(key.size()>length&&key.compare(0,length,section)==0&&key[length]=='/') return true;
@@ -490,6 +490,14 @@ static const SettingHelpEntry SETTING_HELP[] = {
 #ifdef __SWITCH2__
   {CPU_BOOST_KEY, "Console clocks", "Keeps CPU boost active throughout the game. It raises the CPU clock and lowers the GPU clock. The quick menu can change it for the current session."},
 #endif
+  {FRAMEGEN_KEY, "Frame generation",
+   "Generates one intermediate display frame for each real frame to target a smoother 2x presentation. It does not increase emulation speed and may add artifacts or latency. Available with Vulkan and Drako3D. Open the in-game quick menu with L + R + Plus to turn generated frames on or off. On Vulkan, having it on here costs some GPU time in every game, even with generated frames off."},
+  {FRAMEGEN_FLOW_KEY, "Frame generation quality",
+   "Sets the resolution used for optical-flow analysis. Quarter resolution uses the least GPU time and memory; Half resolution keeps more motion detail and is the Switch 2 default; Full resolution keeps the most and costs the most."},
+  {FRAMEGEN_PERFORMANCE_KEY, "Frame generation performance",
+   "Uses LSFG's lighter performance-oriented processing path. Disable it only when you prefer image quality and have enough GPU headroom."},
+  {FRAMEGEN_120HZ_KEY, "Frame generation",
+   "Docked, switches the output to 120 Hz (1440p or 1080p, the TV's 120 Hz mode) so that frame generation doubles 50/60 FPS games to 120. It is used only while the game runs at 50/60 FPS. Off, the output stays at the TV's resolution (up to 4K at 60 Hz) and frame generation doubles 30 FPS games only. Handheld always runs at 120 Hz."},
   {"EmuCore/GS/Renderer", "Graphics backend",
    "Chooses the core the game runs in. Drako3D renders PS2 GS draws natively on the Switch 2 GPU; Vulkan runs PCSX2's Vulkan renderer on mesa-nx's NVK driver. Each renderer is its own emulator program, started by the launcher."},
   {"EmuCore/GS/upscale_multiplier", "Resolution / performance",
@@ -644,6 +652,9 @@ static SettingHelpInfo settingHelpFor(const Opt &option) {
     for(const SettingHelpEntry &entry:SETTING_HELP)
       if(!strcmp(entry.key,option.key)) return {entry.kind,entry.text};
   if(option.type==OT_SUBMENU) return {"Settings group",settingsScreenDescription(option.sub)};
+  if(option.type==OT_STATUS)
+    return {"Required component","Shows whether the Lossless Scaling frame-generation library is installed. LSFG cannot be "
+                                 "enabled until Lossless.dll is copied to sdmc:/switch/armsx2-nx/lsfg/."};
   return {"Setting","Changes this launcher or emulator option. Use the default value when troubleshooting an unexpected game-specific problem."};
 }
 
@@ -3303,8 +3314,22 @@ static RowSwitch optionSwitch(const Opt &option,bool enabled=true) {
 }
 
 
+// Checked at most once a second: the settings screens ask every frame.
+static bool lsfgDllInstalled() {
+  static bool installed=false;
+  static Uint32 checked=0;
+  const Uint32 now=SDL_GetTicks();
+  if(!checked||now-checked>=1000){
+    installed=regularFileExists(LSFG_DLL);
+    checked=now?now:1;
+  }
+  return installed;
+}
+
 static bool optEnabled(const Opt &o) {
   if(o.renderer&&strcmp(iniGet(RENDERER_KEY,"18"),o.renderer)!=0) return false;
+  // Frame generation's own settings wait for the DLL.
+  if(o.key&&o.gateKey&&!strcmp(o.gateKey,FRAMEGEN_KEY)&&!lsfgDllInstalled()) return false;
   if(!o.gateKey) return true;
   const char *value=iniGet(o.gateKey,o.gateOff);
   if(strcmp(o.gateOff,"false")==0&&strcmp(value,"0")==0) return false;
@@ -3330,6 +3355,7 @@ static void optValue(const Opt &o, char *out, int n) {
     snprintf(out,n,"%g%s",value,o.suffix?o.suffix:"");
   }
   else if (o.type==OT_SUBMENU) snprintf(out,n,">");
+  else if (o.type==OT_STATUS) snprintf(out,n,"%s",tr(lsfgDllInstalled()?"Installed":"Missing"));
   else if (o.type==OT_TEXT || o.type==OT_FILE) {
     const char *value=iniGet(o.key,o.def);
     const std::string label=o.type==OT_FILE?fileNameOf(value):value;
@@ -3337,6 +3363,13 @@ static void optValue(const Opt &o, char *out, int n) {
   }
 }
 static void optSetChoice(const Opt &o,const char *value) {
+  // LSFG 2x needs the DLL first.
+  if(o.key&&!strcmp(o.key,FRAMEGEN_KEY)&&!strcmp(value,"true")&&!lsfgDllInstalled()){
+    iniSet(o.key,"false");
+    modalMessage(uiText("LSFG is not ready").c_str(),{uiText("Lossless.dll was not found."),uiText("Copy it to:"),
+                                                      LSFG_DLL,uiText("then enable LSFG again.")});
+    return;
+  }
   iniSet(o.key,value);
   if(o.key && !strcmp(o.key,"Wrapper/Language")){
     const std::string previous(g_localization.Preference());
@@ -3375,6 +3408,7 @@ static bool canAdjustOption(const Opt &option) {
 // What A does on this row, or nullptr when it does nothing at all.
 static const char *confirmLabelForOption(const Opt &option) {
   if (option.type==OT_SUBMENU) return "Open";
+  if (option.type==OT_STATUS) return nullptr;
   if (!optEnabled(option)) return nullptr;
   // "Choose" is only honest where A opens the value popup. Everywhere else it
   // falls through to optAdjust(+1), which is exactly what Right already does.
@@ -3682,6 +3716,8 @@ static const char *settingsScreenDescription(int screen) {
       return "Emulates the PS2 network adapter and hard disk drive, for online and HDD-capable games.";
     case SCR_RA_ADVANCED:
       return "Notifications, overlays, sounds and special modes of RetroAchievements.";
+    case SCR_FRAMEGEN:
+      return "Configures LSFG 2x frame generation for Vulkan and Drako3D. It creates intermediate display frames but does not make PS2 emulation run faster. Each game starts with it off: turn it on from the quick menu (L + R + Plus).";
     default:
       return "Opens this group of emulator settings.";
   }
@@ -3739,6 +3775,8 @@ static void renderSettings(const Screen &S,int sel,int top,const char *ctx){
     const bool en=optEnabled(S.opts[i]);
     SDL_Color lc = !en?(SDL_Color){92,98,110,255}:(cur?COL_VAL:COL_TXT);
     SDL_Color vc = !en?(SDL_Color){92,98,110,255}:(cur?COL_VAL:COL_DIM);
+    if(S.opts[i].type==OT_STATUS)
+      vc=lsfgDllInstalled()?(SDL_Color){120,220,120,255}:(SDL_Color){235,125,115,255};
     char v[96]; optValue(S.opts[i],v,sizeof(v));
     drawSettingsRowText(tr(S.opts[i].label),v,slotY,colW,labelX,valX,cur,lc,vc,false,0,optionSwitch(S.opts[i],en));
   }
@@ -4411,12 +4449,15 @@ static void retroAchievementsScreen() {
 
 static void runSettingsRoot(const char *ctx) {
   const bool global=!(ctx&&*ctx);
-  static const int order[] = { SCR_EMU, SCR_GRAPHICS, SCR_AUDIO, SCR_CONTROLLER, SCR_SYSTEM };
-  const int nscr=(int)(sizeof(order)/sizeof(*order));
-  const int launcherRow=0,libraryRow=1,retroAchievementsRow=2;
+  static const int globalOrder[] = { SCR_EMU, SCR_GRAPHICS, SCR_AUDIO, SCR_CONTROLLER, SCR_SYSTEM };
+  // (globally, Frame Generation is in the General group)
+  static const int gameOrder[] = { SCR_FRAMEGEN, SCR_EMU, SCR_GRAPHICS, SCR_AUDIO, SCR_CONTROLLER, SCR_SYSTEM };
+  const int *order=global?globalOrder:gameOrder;
+  const int nscr=global?(int)std::size(globalOrder):(int)std::size(gameOrder);
+  const int launcherRow=0,libraryRow=1,retroAchievementsRow=2,frameGenerationRow=3;
   // Rows above this index form the "General" group (global settings only); the
   // rest are emulator setting categories under their own section heading.
-  const int screenStart=global?3:0;
+  const int screenStart=global?4:0;
   const int topGroupRows=screenStart;
   const int n=nscr+screenStart;
   int sel=0,top=0;
@@ -4442,6 +4483,7 @@ static void runSettingsRoot(const char *ctx) {
         if(global&&sel==launcherRow) launcherSettingsScreen();
         else if(global&&sel==libraryRow) libraryStorageScreen();
         else if(global&&sel==retroAchievementsRow) retroAchievementsScreen();
+        else if(global&&sel==frameGenerationRow) runSettings(SCR_FRAMEGEN,ctx);
         else runSettings(order[sel-screenStart],ctx);
         beginScreenFx();
       } else if(event.cbutton.button==BTN_X){
@@ -4456,6 +4498,9 @@ static void runSettingsRoot(const char *ctx) {
         else if(global&&sel==retroAchievementsRow)
           showHelpCard("Settings","RetroAchievements","Online achievements",
                        "Signs in to RetroAchievements and controls achievements, hardcore mode, and unlock notifications. Account credentials are stored as a reusable token after sign-in.",
+                       nullptr,"Settings category");
+        else if(global&&sel==frameGenerationRow)
+          showHelpCard("Settings","Frame generation","Frame generation",settingsScreenDescription(SCR_FRAMEGEN),
                        nullptr,"Settings category");
         else {
           const int screen=order[sel-screenStart];
@@ -4502,6 +4547,10 @@ static void runSettingsRoot(const char *ctx) {
         drawSettingsRowText(tr("RetroAchievements"),
                             enabled?storeGet(g_global,"Achievements/Username",""):(loggedIn?tr("Off"):tr("Not signed in")),
                             slot,colW,labelX,valX,current,labelColor,valueColor,false,rowH);
+      } else if(global&&index==frameGenerationRow){
+        const char *value=!lsfgDllInstalled()?"Lossless.dll missing":
+                          !strcmp(storeGet(g_global,FRAMEGEN_KEY,"false"),"true")?"LSFG 2x enabled":"Off";
+        drawSettingsRowText(tr("Frame generation"),tr(value),slot,colW,labelX,valX,current,labelColor,valueColor,false,rowH);
       } else {
         drawSettingsRowText(tr(g_screens[order[index-screenStart]].title),">",
                             slot,colW,labelX,valX,current,labelColor,valueColor,false,rowH);
@@ -5623,6 +5672,15 @@ static bool prepareLaunch(const std::string &key,const std::string &pathKey,cons
   expandClampingModes(effective);
   expandClampingModes(overrides);
   storeSet(effective,"Pad1/Type","DualShock2");
+  const auto frameGenerationOn=[&]{
+    return !strcmp(storeGet(overrides,FRAMEGEN_KEY,storeGet(effective,FRAMEGEN_KEY,"false")),"true");
+  };
+  bool lsfgMissing=false;
+  if(frameGenerationOn()&&!lsfgDllInstalled()){
+    storeSet(effective,FRAMEGEN_KEY,"false");
+    storeSet(overrides,FRAMEGEN_KEY,"false");
+    lsfgMissing=true;
+  }
   // The cores log to logs/emulog.txt, flushed every line on the Switch 2: the record of a crash.
   storeSet(effective,"Logging/EnableFileLogging","true");
   storeSet(effective,"Logging/EnableTimestamps","true");
@@ -5665,6 +5723,9 @@ static bool prepareLaunch(const std::string &key,const std::string &pathKey,cons
     modalMessageStatic("Launch failed",{"Could not write the launch configuration"});
     return false;
   }
+  if(lsfgMissing)
+    modalMessage(uiText("LSFG disabled for this launch").c_str(),
+                 {uiText("Lossless.dll was not found."),uiText("Copy it to:"),LSFG_DLL});
   return true;
 }
 
@@ -6131,7 +6192,7 @@ int main(int argc, char **argv){
   g_griddbReady=griddb_global_init();
   if(!g_griddbReady&&R_SUCCEEDED(socketInitializeDefault())) g_storageSocketReady=true;
   launcherLog("network %s",g_griddbReady?"ready":"unavailable");
-  const char *directories[]={"sdmc:/switch",DATA_DIR,INIS_DIR,LOGS_DIR,EMU_HOST_DIR,COVERS_DIR,GAMECFG_DIR,DEF_GAMEDIR,BIOS_DIR};
+  const char *directories[]={"sdmc:/switch",DATA_DIR,INIS_DIR,LOGS_DIR,EMU_HOST_DIR,COVERS_DIR,GAMECFG_DIR,DEF_GAMEDIR,BIOS_DIR,LSFG_DIR};
   for(const char *directory:directories) if(!ensureDirectory(directory)) return startupFailure("Could not create the ARMSX2-nx data directories.");
   if(!updateRecoveryOk)
     modalMessage(uiText("Update recovery failed").c_str(),{updateRecoveryError,uiText("The installed launcher was left unchanged.")});

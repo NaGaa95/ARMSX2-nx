@@ -17,6 +17,13 @@
 #include <atomic>
 #include <cmath>
 
+#ifdef __SWITCH2__
+#include "switch/lsfg/SwitchLSFG.h"
+#include "switch/lsfg/SwitchLSFGVulkan.h"
+#include "common/Horizon/Horizon.h"
+#include "nx2_platform.h"
+#endif
+
 #if defined(VK_USE_PLATFORM_XLIB_KHR)
 #include <X11/Xlib.h>
 #endif
@@ -627,6 +634,16 @@ static const char* PresentModeToString(VkPresentModeKHR mode)
 
 bool VKSwapChain::SelectPresentMode(VkSurfaceKHR surface, GSVSyncMode* vsync_mode, VkPresentModeKHR* present_mode)
 {
+#ifdef __SWITCH2__
+	// LSFG 2x makes its swapchain FIFO (SwitchLSFG_AdjustSwapchainCreateInfo): report it, so that the present throttle
+	// works and SetVSyncMode does not rebuild the swapchain for a mode it cannot get.
+	if (SwitchLSFG_IsPrepared())
+	{
+		*vsync_mode = GSVSyncMode::FIFO;
+		*present_mode = VK_PRESENT_MODE_FIFO_KHR;
+		return true;
+	}
+#endif
 	VkResult res;
 	u32 mode_count;
 	res = vkGetPhysicalDeviceSurfacePresentModesKHR(
@@ -1020,17 +1037,33 @@ bool VKSwapChain::CreateSwapChain()
 		Console.Error("Exclusive fullscreen control requested, but is not supported on this platform.");
 #endif
 
+#ifdef __SWITCH2__
+	// LSFG 2x: transfer usage and FIFO.
+	const bool lsfg_swap_chain = SwitchLSFG_AdjustSwapchainCreateInfo(swap_chain_info, surface_capabilities);
+	if (lsfg_swap_chain)
+		m_present_mode = swap_chain_info.presentMode;
+#endif
+
 	res = vkCreateSwapchainKHR(GSDeviceVK::GetInstance()->GetDevice(), &swap_chain_info, nullptr, &m_swap_chain);
 	if (res != VK_SUCCESS)
 	{
 		LOG_VULKAN_ERROR(res, "vkCreateSwapchainKHR failed: ");
 		return false;
 	}
+#ifdef __SWITCH2__
+	// A new swapchain can reset the window's pacing: reapply nx2's.
+	nx2DisplayReapply();
+#endif
 
 	// Now destroy the old swap chain, since it's been recreated.
 	// We can do this immediately since all work should have been completed before calling resize.
 	if (old_swap_chain != VK_NULL_HANDLE)
+	{
+#ifdef __SWITCH2__
+		SwitchLSFG_DetachSwapchain(old_swap_chain);
+#endif
 		vkDestroySwapchainKHR(GSDeviceVK::GetInstance()->GetDevice(), old_swap_chain, nullptr);
+	}
 
 	m_window_info.surface_width = std::max(1u, size.width);
 	m_window_info.surface_height = std::max(1u, size.height);
@@ -1050,6 +1083,9 @@ bool VKSwapChain::CreateSwapChain()
 	std::vector<VkImage> images(image_count);
 	res = vkGetSwapchainImagesKHR(GSDeviceVK::GetInstance()->GetDevice(), m_swap_chain, &image_count, images.data());
 	pxAssert(res == VK_SUCCESS);
+#ifdef __SWITCH2__
+	SwitchLSFG_AttachSwapchain(m_swap_chain, {m_image_width, m_image_height}, images.data(), image_count, lsfg_swap_chain);
+#endif
 
 	m_images.reserve(image_count);
 	m_current_image = 0;
@@ -1133,6 +1169,9 @@ void VKSwapChain::DestroySwapChain()
 	if (m_swap_chain == VK_NULL_HANDLE)
 		return;
 
+#ifdef __SWITCH2__
+	SwitchLSFG_DetachSwapchain(m_swap_chain);
+#endif
 	vkDestroySwapchainKHR(GSDeviceVK::GetInstance()->GetDevice(), m_swap_chain, nullptr);
 	m_swap_chain = VK_NULL_HANDLE;
 	m_window_info.surface_width = 0;

@@ -13,6 +13,17 @@
 #include <deko3d.h>
 #include <memory>
 #include <vector>
+
+#ifdef __SWITCH2__
+#include "common/Threading.h"
+#include "switch/lsfg/SwitchLSFG.h"
+#include "switch/lsfg/deko3d/LSFGFrameGenerator.h"
+#include "switch/lsfg/deko3d/LSFGFramePacer.h"
+#include "switch/lsfg/deko3d/LSFGShaders.h"
+
+#include <atomic>
+#include <string>
+#endif
 #endif
 
 // deko3d hardware GS backend for the Nintendo Switch only.
@@ -116,6 +127,8 @@ private:
 	bool SetupSamplers();
 	void BeginFrameIfNeeded();
 	void SubmitFrame();
+	// The frame's commands to the queue, then its fence.
+	void SubmitFrameCommands();
 	// deko3d cbAddMem hook for command streams that exceed CMDBUF_SIZE.
 	static void AddCmdMemoryThunk(void* userData, DkCmdBuf cmdbuf, size_t minReqSize);
 	void AddCmdMemory(DkCmdBuf cmdbuf, size_t minReqSize);
@@ -353,5 +366,35 @@ private:
 	int m_present_width = 0;
 	int m_present_height = 0;
 	int m_present_slot = -1;
+
+#ifdef __SWITCH2__
+	// LSFG 2x (switch/lsfg): with a generator, the frame is composed into m_lsfg_display, then the generated frame and
+	// the real one are blitted to the swapchain and presented (PPSSPP-nx's DekoContext does the same).
+	static constexpr u32 LSFG_SCRATCH_PER_WARP = 32 * 1024;
+	void UpdateFrameGeneration();
+	void UpdateFrameGenerationDisplay();
+	void SubmitGeneratedFrame();
+	bool PresentFrameGenerationImage(const DkImage& image, bool last);
+	void DestroyFrameGeneration();
+	void StopFrameGenerationPreparation();
+
+	std::unique_ptr<Deko3DLSFG::FrameGenerator> m_lsfg_generator;
+	Deko3DLSFG::FramePacer m_lsfg_pacer;
+	Deko3DLSFG::Config m_lsfg_config;
+	SwitchLSFGState m_lsfg_state;
+	DkImage m_lsfg_display{};
+	DkMemBlock m_lsfg_display_memblock = nullptr;
+	bool m_lsfg_display_used = false;
+	bool m_lsfg_failed = false;
+	bool m_lsfg_high_refresh = false;
+	std::string m_lsfg_shader_directory;
+	// The shaders are made on the console from Lossless.dll, once per DLL and setting, on a thread of their own.
+	Threading::Thread m_lsfg_preparation_thread;
+	std::atomic_bool m_lsfg_preparation_cancel{false};
+	std::atomic_bool m_lsfg_preparation_done{false};
+	bool m_lsfg_preparing = false;
+	bool m_lsfg_preparation_performance = true;
+	Deko3DLSFG::PreparedShaders m_lsfg_prepared;
+#endif
 #endif
 };

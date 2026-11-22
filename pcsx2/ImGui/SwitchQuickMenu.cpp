@@ -14,6 +14,7 @@
 #include "INISettingsInterface.h"
 #include "MTGS.h"
 #include "Patch.h"
+#include "PerformanceMetrics.h"
 #include "SIO/Sio.h"
 #include "SaveState.h"
 #include "VMManager.h"
@@ -24,6 +25,7 @@
 #include "common/MemorySettingsInterface.h"
 #include "common/Path.h"
 #include "switch/SwitchSettings.h"
+#include "switch/lsfg/SwitchLSFG.h"
 #include "switch/app/HorizonHost.h"
 
 #include <fmt/format.h>
@@ -910,6 +912,35 @@ namespace
 		};
 	}
 
+	// LSFG 2x for the session: the launcher prepares it, and every game starts with it off.
+	Row FrameGenerationRow()
+	{
+		if (GSGetCurrentRenderAPI() != RenderAPI::DK3D && GSGetCurrentRenderAPI() != RenderAPI::Vulkan)
+		{
+			Row row{.label = "Frame generation", .value = "Vulkan and Drako3D only", .disabled = true};
+			row.detail = "LSFG 2x runs on the Vulkan and Drako3D renderers.";
+			return row;
+		}
+		if (!SwitchLSFG_IsPrepared())
+		{
+			Row row{.label = "Frame generation", .value = "Off in the launcher", .disabled = true};
+			row.detail = "Turn on LSFG 2x in the launcher's Frame generation settings (with Lossless.dll).";
+			return row;
+		}
+		Row row = ToggleRow("Frame generation", SwitchLSFG_IsEnabled(), [](bool on) {
+			if (SwitchLSFG_RequestEnabled(on, PerformanceMetrics::GetInternalFPS()))
+				return;
+			s_notice = SwitchLSFG_IsAvailable() ?
+				"Frame generation doubles 30 FPS games, and 50/60 FPS games at 120 Hz (handheld, or docked with 120 Hz Docked Mode)." :
+				"Frame generation is unavailable on this renderer or display: see logs/emulog.txt.";
+		});
+		if (SwitchLSFG_IsPreparing())
+			row.detail = "Preparing the shaders from Lossless.dll (the first time only).";
+		else if (SwitchLSFG_IsHighRatePassthrough())
+			row.detail = "Native rate: the game runs at the display's rate on its own.";
+		return row;
+	}
+
 	Rows TabRows(int tab)
 	{
 		Rows rows;
@@ -919,6 +950,7 @@ namespace
 				return GameRows();
 			case TAB_EMULATION:
 				rows.push_back(ToggleRow("CPU Boost", Host::IsSwitchCpuBoostEnabled(), Host::SetSwitchCpuBoostEnabled));
+				rows.push_back(FrameGenerationRow());
 				for (int screen : {SCR_CPU, SCR_FRAMERATE, SCR_GAMEFIXES})
 					rows.push_back(ScreenLink(screen));
 				break;

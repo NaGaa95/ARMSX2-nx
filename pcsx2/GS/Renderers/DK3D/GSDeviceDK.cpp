@@ -363,6 +363,12 @@ bool GSDeviceDK::CreateDeviceObjects()
 	DkQueueMaker queue_maker;
 	dkQueueMakerDefaults(&queue_maker, m_device);
 	queue_maker.flags = DkQueueFlags_Graphics | DkQueueFlags_Compute;
+#ifdef __SWITCH2__
+	// LSFG 2x's compute passes need more scratch than the default.
+	SwitchLSFG_Configure(true);
+	if (SwitchLSFG_IsPrepared())
+		queue_maker.perWarpScratchMemorySize = LSFG_SCRATCH_PER_WARP;
+#endif
 	Horizon::Breadcrumb("DK3D: dkQueueCreate");
 	m_queue = dkQueueCreate(&queue_maker);
 	if (!m_queue)
@@ -961,8 +967,8 @@ bool GSDeviceDK::CreateSwapchain()
 	DkImageLayoutMaker layout_maker;
 	dkImageLayoutMakerDefaults(&layout_maker, m_device);
 #ifdef __SWITCH2__
-	// (drako3d: no hardware compression on swapchain images)
-	layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent;
+	// drako3d swapchain images cannot use hardware compression; LSFG 2x blits into them.
+	layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine;
 #else
 	layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_HwCompression;
 #endif
@@ -1025,6 +1031,14 @@ void GSDeviceDK::DestroySwapchain()
 
 void GSDeviceDK::DestroyDeviceObjects()
 {
+#ifdef __SWITCH2__
+	StopFrameGenerationPreparation();
+	DestroyFrameGeneration();
+	SwitchLSFG_SetStatus(false, false);
+	// The launcher starts at the TV's own resolution.
+	if (nx2DisplaySetFrameGeneration(false))
+		nx2DisplayReapply();
+#endif
 	if (m_queue)
 		dkQueueWaitIdle(m_queue);
 
@@ -1205,6 +1219,7 @@ void GSDeviceDK::ResizeWindow(u32 new_window_width, u32 new_window_height, float
 		return;
 
 	dkQueueWaitIdle(m_queue);
+	DestroyFrameGeneration();
 	DestroySwapchain();
 	m_present_width = static_cast<int>(new_window_width);
 	m_present_height = static_cast<int>(new_window_height);
@@ -1239,17 +1254,28 @@ GSDevice::PresentResult GSDeviceDK::DoBeginPresent(bool frame_skip)
 	BeginFrameIfNeeded();
 	WaitForCopyEngine();
 
-	// The release libdeko3d svcBreaks on any acquire failure without calling cbDebug. Record
-	// whether the queue had already faulted (GPU fault/timeout) as opposed to VI refusing the
-	// dequeue, since the Atmosphère report can't tell the two apart.
-	if (dkQueueIsInErrorState(m_queue))
-		Horizon::ExitTrace("DK3D: queue in error state before dkQueueAcquireImage (GPU fault or timeout)");
+#ifdef __SWITCH2__
+	UpdateFrameGeneration();
+	if (m_lsfg_generator)
+	{
+		dkImageViewDefaults(&m_swapchain_view, &m_lsfg_display);
+		m_lsfg_display_used = true;
+	}
+	else
+#endif
+	{
+		// The release libdeko3d svcBreaks on any acquire failure without calling cbDebug. Record
+		// whether the queue had already faulted (GPU fault/timeout) as opposed to VI refusing the
+		// dequeue, since the Atmosphère report can't tell the two apart.
+		if (dkQueueIsInErrorState(m_queue))
+			Horizon::ExitTrace("DK3D: queue in error state before dkQueueAcquireImage (GPU fault or timeout)");
 
-	const Common::Timer::Value acquire_start = Common::Timer::GetCurrentValue();
-	m_present_slot = dkQueueAcquireImage(m_queue, m_swapchain);
-	PerformanceMetrics::AccumulateGSAcquireWait(
-		static_cast<u64>(Common::Timer::ConvertValueToNanoseconds(Common::Timer::GetCurrentValue() - acquire_start)));
-	dkImageViewDefaults(&m_swapchain_view, &m_framebuffers[m_present_slot]);
+		const Common::Timer::Value acquire_start = Common::Timer::GetCurrentValue();
+		m_present_slot = dkQueueAcquireImage(m_queue, m_swapchain);
+		PerformanceMetrics::AccumulateGSAcquireWait(
+			static_cast<u64>(Common::Timer::ConvertValueToNanoseconds(Common::Timer::GetCurrentValue() - acquire_start)));
+		dkImageViewDefaults(&m_swapchain_view, &m_framebuffers[m_present_slot]);
+	}
 
 	// Clear letterbox/unwritten areas before PresentRect draws.
 	dkCmdBufBindRenderTarget(m_cmdbuf, &m_swapchain_view, nullptr);
@@ -1272,7 +1298,12 @@ void GSDeviceDK::RenderImGui()
 {
 	ImGui::Render();
 	const ImDrawData* draw_data = ImGui::GetDrawData();
-	if (!draw_data || draw_data->CmdLists.Size == 0 || !m_imgui_shaders_ok || !m_frame_active || m_present_slot < 0)
+#ifdef __SWITCH2__
+	const bool presenting = m_present_slot >= 0 || m_lsfg_display_used;
+#else
+	const bool presenting = m_present_slot >= 0;
+#endif
+	if (!draw_data || draw_data->CmdLists.Size == 0 || !m_imgui_shaders_ok || !m_frame_active || !presenting)
 		return;
 
 	UpdateImGuiTextures();
@@ -1394,16 +1425,16 @@ void GSDeviceDK::EndPresent()
 {
 #ifdef __SWITCH__
 	RenderImGui();
+#ifdef __SWITCH2__
+	UpdateFrameGenerationDisplay();
+#endif
 	SubmitFrame();
 #endif
 }
 
 #ifdef __SWITCH__
-void GSDeviceDK::SubmitFrame()
+void GSDeviceDK::SubmitFrameCommands()
 {
-	if (!m_frame_active)
-		return;
-
 	FrameContext& ctx = m_frames[m_frame_index];
 	if (ctx.timestamp_written)
 		WriteGPUTimestamp(m_frame_index, 1);
@@ -1422,6 +1453,21 @@ void GSDeviceDK::SubmitFrame()
 	dkQueueSignalFence(m_queue, &ctx.fence, false);
 	ctx.fence_pending = true;
 	ctx.serial = ++m_submitted_serial;
+}
+
+void GSDeviceDK::SubmitFrame()
+{
+	if (!m_frame_active)
+		return;
+
+#ifdef __SWITCH2__
+	if (m_lsfg_display_used)
+	{
+		SubmitGeneratedFrame();
+		return;
+	}
+#endif
+	SubmitFrameCommands();
 	if (m_present_slot >= 0)
 		dkQueuePresentImage(m_queue, m_swapchain, m_present_slot);
 	else
@@ -1430,6 +1476,245 @@ void GSDeviceDK::SubmitFrame()
 	m_present_slot = -1;
 	m_frame_active = false;
 }
+
+#ifdef __SWITCH2__
+namespace
+{
+	u64 MonotonicNs()
+	{
+		return static_cast<u64>(Common::Timer::ConvertValueToNanoseconds(Common::Timer::GetCurrentValue()));
+	}
+} // namespace
+
+void GSDeviceDK::UpdateFrameGeneration()
+{
+	const SwitchLSFGState state = SwitchLSFG_PollState();
+	const Deko3DLSFG::Config config{state.performance, state.flow_scale >= 1.0f ? 1u : state.flow_scale >= 0.5f ? 2u : 4u};
+	const bool quality_changed = config.performance != m_lsfg_config.performance;
+	const bool changed = quality_changed || config.flowDenominator != m_lsfg_config.flowDenominator ||
+		state.enabled != m_lsfg_state.enabled;
+	const bool speed_changed = state.speed_control_state != m_lsfg_state.speed_control_state;
+	if (changed || m_lsfg_failed)
+		DestroyFrameGeneration();
+	if (changed)
+	{
+		m_lsfg_pacer.Reset();
+		m_lsfg_failed = false;
+	}
+	if (quality_changed || !state.enabled)
+	{
+		// The worker stops between modules; its result is dropped when it ends (no wait on this thread).
+		if (m_lsfg_preparing)
+			m_lsfg_preparation_cancel.store(true, std::memory_order_release);
+		if (quality_changed)
+			m_lsfg_shader_directory.clear();
+	}
+	m_lsfg_config = config;
+	m_lsfg_state = state;
+	if (state.reset_session || speed_changed)
+	{
+		m_lsfg_pacer.Reset();
+		if (state.reset_session)
+			m_lsfg_failed = false;
+		if (m_lsfg_generator)
+			m_lsfg_generator->Reset();
+	}
+
+	if (m_lsfg_preparing && m_lsfg_preparation_done.load(std::memory_order_acquire))
+	{
+		m_lsfg_preparation_thread.Join();
+		m_lsfg_preparing = false;
+		if (!m_lsfg_prepared.cancelled && m_lsfg_preparation_performance == config.performance)
+		{
+			if (m_lsfg_prepared.error.empty())
+			{
+				m_lsfg_shader_directory = std::move(m_lsfg_prepared.directory);
+				Console.WriteLn("LSFG: shaders ready in %s", m_lsfg_shader_directory.c_str());
+			}
+			else if (state.enabled)
+			{
+				m_lsfg_failed = true;
+				Console.Error("LSFG: shader preparation failed: %s", m_lsfg_prepared.error.c_str());
+			}
+		}
+	}
+	if (!state.enabled || m_lsfg_failed)
+	{
+		SwitchLSFG_SetStatus(!m_lsfg_failed, false, m_lsfg_preparing);
+		return;
+	}
+
+	// Lossless.dll's shaders are compiled for drako3d once, then read from the cache.
+	if (!m_lsfg_preparing && m_lsfg_shader_directory.empty())
+	{
+		m_lsfg_preparing = true;
+		m_lsfg_preparation_performance = config.performance;
+		m_lsfg_preparation_cancel.store(false, std::memory_order_release);
+		m_lsfg_preparation_done.store(false, std::memory_order_release);
+		m_lsfg_preparation_thread.SetStackSize(4 * 1024 * 1024);
+		m_lsfg_preparation_thread.Start([this, performance = config.performance]() {
+			Threading::SetNameOfCurrentThread("LSFG shaders");
+			m_lsfg_prepared = Deko3DLSFG::PrepareShaders(
+				performance, m_lsfg_preparation_cancel, SWITCH_LSFG_DLL_PATH, SWITCH_LSFG_DEKO_CACHE_ROOT);
+			m_lsfg_preparation_done.store(true, std::memory_order_release);
+		});
+	}
+
+	// Docked with the 120 Hz option, a 50/60 FPS game moves the output to 1440p: wait until the game is measured and the
+	// window has the size it keeps, rather than make a generator for a size that is then replaced.
+	u32 window_width = 0, window_height = 0;
+	const bool resizing = R_SUCCEEDED(nwindowGetDimensions(nwindowGetDefault(), &window_width, &window_height)) &&
+		(static_cast<int>(window_width) != m_present_width || static_cast<int>(window_height) != m_present_height);
+	const bool measuring = state.high_refresh && nx2DisplayRefreshRate() < 120 && !m_lsfg_pacer.LowRateSource();
+	if (!m_lsfg_generator && (resizing || measuring))
+	{
+		SwitchLSFG_SetStatus(true, false, m_lsfg_preparing);
+		return;
+	}
+
+	if (!m_lsfg_generator && !m_lsfg_shader_directory.empty())
+	{
+		Deko3DLSFG::Services services;
+		services.device = m_device;
+		services.scratchPerWarp = LSFG_SCRATCH_PER_WARP;
+		services.allocate = [device = m_device](uint32_t bytes, uint32_t flags, const char*) {
+			return dk::UniqueMemBlock{dk::MemBlockMaker{device, AlignUp(bytes, DK_MEMBLOCK_ALIGNMENT)}.setFlags(flags).create()};
+		};
+		// (the generator is only destroyed once the queue is idle)
+		services.retire = [](dk::UniqueMemBlock) {};
+		services.log = [](const std::string& message) { Console.WriteLn("%s", message.c_str()); };
+		m_lsfg_generator = Deko3DLSFG::CreateFrameGenerator(std::move(services), m_lsfg_config, m_lsfg_shader_directory,
+			static_cast<u32>(m_present_width), static_cast<u32>(m_present_height));
+
+		if (m_lsfg_generator)
+		{
+			DkImageLayoutMaker layout_maker;
+			dkImageLayoutMakerDefaults(&layout_maker, m_device);
+			layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_Usage2DEngine;
+			layout_maker.format = DkImageFormat_RGBA8_Unorm;
+			layout_maker.dimensions[0] = m_present_width;
+			layout_maker.dimensions[1] = m_present_height;
+			DkImageLayout layout;
+			dkImageLayoutInitialize(&layout, &layout_maker);
+			DkMemBlockMaker memblock_maker;
+			dkMemBlockMakerDefaults(&memblock_maker, m_device,
+				AlignUp(static_cast<u32>(dkImageLayoutGetSize(&layout)), std::max<u32>(dkImageLayoutGetAlignment(&layout), DK_MEMBLOCK_ALIGNMENT)));
+			memblock_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
+			m_lsfg_display_memblock = dkMemBlockCreate(&memblock_maker);
+			if (m_lsfg_display_memblock)
+				dkImageInitialize(&m_lsfg_display, &layout, m_lsfg_display_memblock, 0);
+		}
+		if (!m_lsfg_generator || !m_lsfg_display_memblock)
+		{
+			m_lsfg_generator.reset();
+			if (m_lsfg_display_memblock)
+			{
+				dkMemBlockDestroy(m_lsfg_display_memblock);
+				m_lsfg_display_memblock = nullptr;
+			}
+			m_lsfg_failed = true;
+			Console.Error("LSFG: the frame generator could not be created at %dx%d", m_present_width, m_present_height);
+		}
+	}
+	SwitchLSFG_SetStatus(!m_lsfg_failed, false, m_lsfg_preparing);
+}
+
+void GSDeviceDK::UpdateFrameGenerationDisplay()
+{
+	// Until the generator exists, the game is measured here (for the 120 Hz option's decision).
+	if (!m_lsfg_display_used && m_lsfg_state.active)
+		m_lsfg_pacer.Observe(MonotonicNs(), true, false);
+	if (!m_lsfg_state.enabled || !m_lsfg_state.high_refresh)
+		m_lsfg_high_refresh = false;
+	else if (m_lsfg_state.active && m_lsfg_pacer.HighRateSource())
+		m_lsfg_high_refresh = true;
+	// Docked with the 120 Hz option, a 50/60 FPS game moves the output to 120 Hz (1440p or 1080p): the new size reaches
+	// ResizeWindow through Host::BeginPresentFrame.
+	if (nx2DisplaySetFrameGeneration(m_lsfg_high_refresh))
+		nx2DisplayReapply();
+	m_lsfg_pacer.SetRefreshRate(nx2DisplayRefreshRate());
+}
+
+bool GSDeviceDK::PresentFrameGenerationImage(const DkImage& image, bool last)
+{
+	if (dkQueueIsInErrorState(m_queue))
+		return false;
+	const int slot = dkQueueAcquireImage(m_queue, m_swapchain);
+	if (slot < 0 || slot >= static_cast<int>(NUM_FRAMEBUFFERS))
+		return false;
+	DkImageView source, destination;
+	dkImageViewDefaults(&source, &image);
+	dkImageViewDefaults(&destination, &m_framebuffers[slot]);
+	const DkImageRect rect = {0, 0, 0, static_cast<u32>(m_present_width), static_cast<u32>(m_present_height), 1};
+	IssueBarrier(DkBarrier_Full, DkInvalidateFlags_Image);
+	dkCmdBufBlitImage(m_cmdbuf, &source, &rect, &destination, &rect, DkBlitFlag_FilterNearest, 0);
+	m_copy_engine_busy = true;
+	if (last)
+		SubmitFrameCommands();
+	else
+		dkQueueSubmitCommands(m_queue, dkCmdBufFinishList(m_cmdbuf));
+	dkQueuePresentImage(m_queue, m_swapchain, slot);
+	return true;
+}
+
+void GSDeviceDK::SubmitGeneratedFrame()
+{
+	m_lsfg_display_used = false;
+	const auto decision = m_lsfg_pacer.Observe(MonotonicNs(), m_lsfg_state.active, m_lsfg_generator != nullptr);
+	if (decision.reset && m_lsfg_generator)
+		m_lsfg_generator->Reset();
+	bool generated = false;
+	// Only a present that carries a new game frame is interpolated.
+	if (decision.generate && m_lsfg_generator && m_present_has_new_frame)
+	{
+		generated = m_lsfg_generator->Generate(m_cmdbuf, m_lsfg_display, static_cast<u32>(m_present_width),
+			static_cast<u32>(m_present_height));
+		m_lsfg_failed = m_lsfg_generator->Failed();
+		// (the generator bound its own shaders, descriptors and images)
+		InvalidateHWStateCache();
+	}
+	SwitchLSFG_SetStatus(!m_lsfg_failed, decision.highRate, m_lsfg_preparing);
+	nx2DisplayApply(generated || m_vsync_mode != GSVSyncMode::Disabled ? 1 : 0);
+
+	const u64 present_start = MonotonicNs();
+	bool presented = !generated || PresentFrameGenerationImage(*m_lsfg_generator->GeneratedImage(), false);
+	presented = presented && PresentFrameGenerationImage(m_lsfg_display, true);
+	m_lsfg_pacer.PresentTime(MonotonicNs() - present_start);
+	if (!presented)
+	{
+		// No image to present to (or a fault): the frame's work still goes to the GPU.
+		SubmitFrameCommands();
+		dkQueueFlush(m_queue);
+	}
+	m_present_slot = -1;
+	m_frame_active = false;
+}
+
+void GSDeviceDK::DestroyFrameGeneration()
+{
+	if (!m_lsfg_generator && !m_lsfg_display_memblock)
+		return;
+	dkQueueWaitIdle(m_queue);
+	m_lsfg_generator.reset();
+	if (m_lsfg_display_memblock)
+	{
+		dkMemBlockDestroy(m_lsfg_display_memblock);
+		m_lsfg_display_memblock = nullptr;
+	}
+	m_lsfg_display = {};
+	m_lsfg_display_used = false;
+	InvalidateHWStateCache();
+}
+
+void GSDeviceDK::StopFrameGenerationPreparation()
+{
+	if (!m_lsfg_preparing)
+		return;
+	m_lsfg_preparation_cancel.store(true, std::memory_order_release);
+	m_lsfg_preparation_thread.Join();
+	m_lsfg_preparing = false;
+}
+#endif
 #endif
 
 void GSDeviceDK::SetVSyncMode(GSVSyncMode mode, bool allow_present_throttle)
