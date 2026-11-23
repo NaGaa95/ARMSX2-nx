@@ -653,6 +653,22 @@ public:
 
 private:
 	std::unique_ptr<VKSwapChain> m_swap_chain;
+#ifdef __SWITCH2__
+	// GameShare's guest screen: a swapchain on the guest's window that gets the presented image scaled, copied at the
+	// end of each present (when one of its images is free) and presented with that submission
+	void RecordGuestCopy(VkCommandBuffer cmdbuffer);
+	struct GuestScreen
+	{
+		VkSurfaceKHR surface = VK_NULL_HANDLE;
+		VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+		VkExtent2D extent = {};
+		std::vector<VkImage> images;
+		std::vector<VkSemaphore> rendered; // per image, signaled by the submission that copies into it
+		std::array<VkSemaphore, NUM_COMMAND_BUFFERS> acquired = {}; // per command buffer, its acquire
+		u32 image_index = 0;
+		bool pending = false; // copied in the current command buffer, presented at its submission
+	} m_guest;
+#endif
 	bool m_resize_requested = false;
 	bool m_is_presenting = false;
 
@@ -946,6 +962,11 @@ public:
 	bool IsPresenting() const;
 
 	bool SetGPUTimingEnabled(bool enabled) override;
+#ifdef __SWITCH2__
+	bool SupportsGuestScreen() const override { return true; }
+	bool OpenGuestScreen(void* window) override;
+	void CloseGuestScreen() override;
+#endif
 	void StartGPUTiming(u32 index);
 	void EndGPUTiming(u32 index);
 	void ReadGPUTiming(u32 index);

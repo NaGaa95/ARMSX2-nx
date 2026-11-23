@@ -27,6 +27,9 @@
 #include "switch/SwitchSettings.h"
 #include "switch/lsfg/SwitchLSFG.h"
 #include "switch/app/HorizonHost.h"
+#ifdef __SWITCH2__
+#include "nx2_gameshare.h"
+#endif
 
 #include <fmt/format.h>
 #include <imgui.h>
@@ -966,6 +969,17 @@ namespace
 				const Opt& type = *FindOption(PAD2_TYPE_KEY);
 				const std::string pad2 = ReadOption(type);
 				const auto connected = std::find_if(type.ch, type.ch + type.nch, [&](const Choice& choice) { return pad2 == choice.val; });
+#ifdef __SWITCH2__
+				// GameShare: which controller the other console plays, this console's taking the other one
+				if (nx2GameShareActive())
+				{
+					Row row = ChoiceRow("GameShare player", {{"Player 2", "false"}, {"Player 1", "true"}},
+						nx2GameShareSwapRoles() ? "true" : "false",
+						[](const std::string& value) { nx2GameShareSetSwapRoles(value == "true"); });
+					row.detail = "The controller the other console plays. This console's controller takes the other one.";
+					rows.push_back(std::move(row));
+				}
+#endif
 				rows.push_back(ScreenLink(SCR_PAD1, "DualShock 2"));
 				rows.push_back(ScreenLink(SCR_PAD2, connected != type.ch + type.nch ? connected->label : pad2));
 				break;

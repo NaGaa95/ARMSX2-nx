@@ -11,6 +11,10 @@
 #include "common/Error.h"
 #include "common/Horizon/Horizon.h"
 
+#ifdef __SWITCH2__
+#include "nx2_gameshare.h"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -76,6 +80,10 @@ void AudoutAudioStream::FillBuffer(AudioOutBuffer& buf)
 
 	buf.data_size = BUFFER_BYTES;
 	buf.data_offset = 0;
+#ifdef __SWITCH2__
+	// GameShare's guest with a screen of its own hears the game too
+	nx2GameShareWriteGuestAudioRate(out, BUFFER_FRAMES, m_sample_rate);
+#endif
 }
 
 void AudoutAudioStream::ThreadEntry()

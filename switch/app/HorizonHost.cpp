@@ -39,6 +39,7 @@
 #include <vector>
 
 #ifdef __SWITCH2__
+#include "nx2_gameshare.h"
 #include "nx2_platform.h"
 #endif
 
@@ -186,6 +187,7 @@ void Host::ReleaseRenderWindow()
 void Host::BeginPresentFrame()
 {
 #ifdef __SWITCH2__
+	nx2GameShareUpdate();
 	const LimiterModeType limiter = VMManager::GetLimiterMode();
 	SwitchLSFG_SetGameState(VMManager::GetState() == VMState::Running && !SwitchQuickMenu::IsOpen(),
 		limiter == LimiterModeType::Turbo || limiter == LimiterModeType::Unlimited);
@@ -359,6 +361,8 @@ void Host::OnVMStarted()
 void Host::OnVMDestroyed()
 {
 #ifdef __SWITCH2__
+	// (the game has stopped: nothing presents to the guest's screen or writes its audio any more)
+	nx2GameShareEnd();
 	SwitchQuickMenu::OnVMStopped();
 	SetSwitchCpuBoostEnabled(false);
 #endif

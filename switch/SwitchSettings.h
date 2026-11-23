@@ -110,6 +110,7 @@ inline constexpr Choice C_hwdl[]     = { {"Accurate","0"}, {"Accurate, full","1"
                                      {"Unsynchronized","3"}, {"Disabled","4"}, {"Asynchronous","5"} };
 inline constexpr Choice C_sync[]     = { {"TimeStretch","TimeStretch"}, {"Off","Disabled"} };
 inline constexpr Choice C_audio_backend[] = { {"audren","Audren"}, {"audout","Audout"} };
+inline constexpr Choice C_gameshare_player[] = { {"Player 2","false"}, {"Player 1","true"} };
 inline constexpr Choice C_eecr[]     = { {"50%","-3"}, {"60%","-2"}, {"75%","-1"}, {"100%","0"}, {"130%","1"}, {"180%","2"}, {"300%","3"} };
 inline constexpr Choice C_eecs[]     = { {"Off","0"}, {"Mild","1"}, {"Moderate","2"}, {"Maximum","3"} };
 inline constexpr Choice C_rounding[] = { {"Nearest","0"}, {"Negative","1"}, {"Positive","2"}, {"Chop / Zero","3"} };
@@ -389,9 +390,15 @@ inline constexpr Opt S_advanced[] = {
   O_BOOL("VU1 recompiler",         "EmuCore/CPU/Recompiler/EnableVU1", "true"),
   O_BOOL("IOP recompiler",         "EmuCore/CPU/Recompiler/EnableIOP", "true"),
 };
+// GameShare (Minus on a game in the launcher): Player 2 gives the other console controller 2, Player 1 gives it
+// controller 1 and moves this console's controller to controller 2. The quick menu changes it during play.
+inline constexpr char GAMESHARE_SWAP_KEY[] = "Switch/GameShareSwap";
 inline constexpr Opt S_controller[] = {
   O_SUB("Controller 1", SCR_PAD1),
   O_SUB("Controller 2", SCR_PAD2),
+#ifdef __SWITCH2__
+  O_BOOT("GameShare player", GAMESHARE_SWAP_KEY, C_gameshare_player, "false"),
+#endif
 };
 // Controller 1 is always a DualShock 2 (the launcher writes it); controller 2 can be unplugged. A page holds the
 // controller's settings, then the Switch button each DualShock 2 button is read from.

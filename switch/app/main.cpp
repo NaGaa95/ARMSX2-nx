@@ -54,7 +54,9 @@
 #include <vector>
 
 #ifdef __SWITCH2__
+#include "nx2_gameshare.h"
 #include "nx2_platform.h"
+#include "pcsx2/GS/Renderers/Common/GSDevice.h"
 
 // The core ends with _Exit: no static destructors or atexit handlers beside threads nobody joined. drako3d releases its
 // GPU client only in an atexit handler, which the launcher's Mesa needs: -Wl,--wrap=atexit records the one nvLibInit
@@ -356,6 +358,8 @@ namespace
 		{
 			s_launch_image = handoff->GetStringValue("Launch", "Path", "");
 			s_return_nro = handoff->GetStringValue("Launch", "Launcher", "");
+			// Minus on the game in the launcher: it starts with a GameShare session
+			nx2GameShareConfigure(handoff->GetBoolValue("Launch", "GameShare", false), false);
 			s_launcher_game_settings = std::move(handoff);
 			auto lock = Host::GetSettingsLock();
 			Host::Internal::SetSwitchLaunchSettingsLayer(s_launcher_game_settings.get(), lock);
@@ -406,6 +410,54 @@ namespace
 		if (!FileSystem::WriteStringToFile(LAUNCH_ERROR_PATH, message))
 			ERROR_LOG("Could not write {}", LAUNCH_ERROR_PATH);
 		HorizonHost::RequestExit();
+	}
+
+	// GameShare's guest screen, made and destroyed on the GS thread (GSDevice::OpenGuestScreen)
+	bool OpenGameShareScreen(void* window, int, int, void*)
+	{
+		bool opened = false;
+		MTGS::RunOnGSThread([window, &opened]() { opened = g_gs_device && g_gs_device->OpenGuestScreen(window); });
+		MTGS::WaitGS(false);
+		return opened;
+	}
+
+	void CloseGameShareScreen(void*)
+	{
+		// (a GS device that already went closed it)
+		if (!MTGS::IsOpen())
+			return;
+		MTGS::RunOnGSThread([]() {
+			if (g_gs_device)
+				g_gs_device->CloseGuestScreen();
+		});
+		MTGS::WaitGS(false);
+	}
+
+	// The VM is up and paused: the GameShare session the launcher asked for starts before the game runs. The guest
+	// gets a screen of its own when the renderer can present to its window (Drako3D, Vulkan), else it mirrors this
+	// console (OpenGL). False when the game must not run: matchmaking was cancelled (back to the launcher) or the
+	// session failed (the launcher shows why).
+	bool StartGameShare()
+	{
+		if (!nx2GameShareRequested() || nx2GameShareActive())
+			return true;
+		nx2GameShareSetSwapRoles(Host::GetBoolSettingValue("Switch", "GameShareSwap", false));
+		static const Nx2GameShareScreen screen = {OpenGameShareScreen, CloseGameShareScreen, nullptr};
+		const bool separate = g_gs_device && g_gs_device->SupportsGuestScreen();
+		char error[256] = {};
+		switch (nx2GameShareBegin(separate ? &screen : nullptr, error, sizeof(error)))
+		{
+			case Nx2GameShare_Started:
+				INFO_LOG("GameShare: started ({}), the guest is player {}", separate ? "guest screen" : "mirrored",
+					nx2GameShareSwapRoles() ? 1 : 2);
+				return true;
+			case Nx2GameShare_Cancelled:
+				INFO_LOG("GameShare: matchmaking cancelled");
+				return false;
+			default:
+				ReportLaunchError(fmt::format("GameShare could not start:\n{}", error));
+				return false;
+		}
 	}
 #endif
 
@@ -467,8 +519,13 @@ namespace
 #endif
 		};
 		auto done_callback = [](VMBootResult result, const Error& error) {
+#ifdef __SWITCH2__
+			if (result == VMBootResult::StartupSuccess)
+				VMManager::SetState(StartGameShare() ? VMState::Running : VMState::Stopping);
+#else
 			if (result == VMBootResult::StartupSuccess)
 				VMManager::SetState(VMState::Running);
+#endif
 			else
 				ReportInitialBootFailure(result, error);
 		};
@@ -588,10 +645,11 @@ namespace
 		device.last = strength;
 	}
 
-	void PollPadRumble(RumbleDevice& device, const PadState& pad, u32 player, bool suppressed)
+	// The console's controller slot (pad) rumbles at strength (low motor in the low 16 bits, high in the high ones)
+	void PollPadRumble(RumbleDevice& device, const PadState& pad, u32 slot, u32 strength)
 	{
 		const HidNpadIdType id = padIsNpadActive(&pad, HidNpadIdType_Handheld) ?
-			HidNpadIdType_Handheld : static_cast<HidNpadIdType>(HidNpadIdType_No1 + player);
+			HidNpadIdType_Handheld : static_cast<HidNpadIdType>(HidNpadIdType_No1 + slot);
 		const u32 style = padIsNpadActive(&pad, id) ? hidGetNpadStyleSet(id) : 0;
 		if (device.id != id || device.style != style)
 		{
@@ -604,7 +662,25 @@ namespace
 					device.count = count;
 			}
 		}
-		SendRumble(device, suppressed ? 0 : s_pad_vibration[player].load(std::memory_order_relaxed));
+		SendRumble(device, strength);
+	}
+
+	// GameShare: the guest's controller drives its player (controller 2, or controller 1 when the roles are swapped)
+	// and the console's controllers the other one in order
+	struct PlayerSource
+	{
+		bool guest;
+		u32 slot;
+	};
+
+	PlayerSource GetPlayerSource(u32 player)
+	{
+		if (!nx2GameShareActive())
+			return {false, player};
+		const u32 guest_player = nx2GameShareSwapRoles() ? 0 : 1;
+		if (player == guest_player)
+			return {true, 0};
+		return {false, player < guest_player ? player : player - 1};
 	}
 #else
 	struct ButtonMap
@@ -681,10 +757,13 @@ namespace
 		Pad::SetControllerState(player, static_cast<u32>(down), y < 0.0f ? -y : 0.0f);
 	}
 
-	void FeedGamePad(u32 player, PadState& pad, u64 held, bool captured = false)
+	void FeedGamePad(u32 player, u64 held, HidAnalogStickState left, HidAnalogStickState right, bool captured = false)
 	{
 		if (captured)
+		{
 			held = 0;
+			left = right = {};
+		}
 #ifdef __SWITCH2__
 		for (size_t i = 0; i < std::size(PS2_BUTTONS); ++i)
 		{
@@ -696,12 +775,15 @@ namespace
 			Pad::SetControllerState(player, static_cast<u32>(m.ps2), (held & m.nx) ? 1.0f : 0.0f);
 #endif
 
-		ApplyStick(player, captured ? HidAnalogStickState{} : padGetStickPos(&pad, 0),
-			PadDualshock2::Inputs::PAD_L_LEFT, PadDualshock2::Inputs::PAD_L_RIGHT,
+		ApplyStick(player, left, PadDualshock2::Inputs::PAD_L_LEFT, PadDualshock2::Inputs::PAD_L_RIGHT,
 			PadDualshock2::Inputs::PAD_L_UP, PadDualshock2::Inputs::PAD_L_DOWN);
-		ApplyStick(player, captured ? HidAnalogStickState{} : padGetStickPos(&pad, 1),
-			PadDualshock2::Inputs::PAD_R_LEFT, PadDualshock2::Inputs::PAD_R_RIGHT,
+		ApplyStick(player, right, PadDualshock2::Inputs::PAD_R_LEFT, PadDualshock2::Inputs::PAD_R_RIGHT,
 			PadDualshock2::Inputs::PAD_R_UP, PadDualshock2::Inputs::PAD_R_DOWN);
+	}
+
+	void FeedGamePad(u32 player, PadState& pad, u64 held, bool captured = false)
+	{
+		FeedGamePad(player, held, padGetStickPos(&pad, 0), padGetStickPos(&pad, 1), captured);
 	}
 
 #ifndef __SWITCH2__
@@ -741,6 +823,8 @@ namespace
 #ifdef __SWITCH2__
 		bool was_captured = false;
 		std::array<RumbleDevice, NUM_LOCAL_PLAYERS> rumble{};
+		u64 guest_held_before = 0;
+		u32 guest_rumble = 0;
 #else
 		bool prev_menu_combo = false;
 #endif
@@ -757,15 +841,42 @@ namespace
 			}
 
 #ifdef __SWITCH2__
-			const bool captured = SwitchQuickMenu::CaptureInput(held[0], padGetButtonsDown(&s_pads[0]));
+			// (GameShare's guest opens and uses the quick menu too)
+			Nx2GameShareInput guest{};
+			const u64 guest_held = nx2GameShareGetGuestInput(&guest) ? guest.buttons : 0;
+			const u64 guest_down = guest_held & ~guest_held_before;
+			guest_held_before = guest_held;
+			const bool captured =
+				SwitchQuickMenu::CaptureInput(held[0] | guest_held, padGetButtonsDown(&s_pads[0]) | guest_down);
 			const VMState state = VMManager::GetState();
 			if ((!captured && state == VMState::Running) || (captured && !was_captured && VMManager::HasValidVM()))
 			{
 				for (u32 player = 0; player < NUM_LOCAL_PLAYERS; player++)
-					FeedGamePad(player, s_pads[player], held[player], captured);
+				{
+					const PlayerSource source = GetPlayerSource(player);
+					if (source.guest)
+						FeedGamePad(player, guest_held, {guest.stick[0], guest.stick[1]}, {guest.stick[2], guest.stick[3]},
+							captured);
+					else
+						FeedGamePad(player, s_pads[source.slot], held[source.slot], captured);
+				}
 			}
+			std::array<u32, NUM_LOCAL_PLAYERS> slot_rumble{};
 			for (u32 player = 0; player < NUM_LOCAL_PLAYERS; ++player)
-				PollPadRumble(rumble[player], s_pads[player], player, captured || state != VMState::Running);
+			{
+				const u32 strength =
+					captured || state != VMState::Running ? 0 : s_pad_vibration[player].load(std::memory_order_relaxed);
+				const PlayerSource source = GetPlayerSource(player);
+				if (!source.guest)
+					slot_rumble[source.slot] = strength;
+				else if (strength != guest_rumble)
+				{
+					nx2GameShareSetGuestRumble((strength & 0xFFFF) / 65535.0f, (strength >> 16) / 65535.0f);
+					guest_rumble = strength;
+				}
+			}
+			for (u32 slot = 0; slot < NUM_LOCAL_PLAYERS; ++slot)
+				PollPadRumble(rumble[slot], s_pads[slot], slot, slot_rumble[slot]);
 			was_captured = captured;
 #else
 			s_nav_snapshot.store(held[0], std::memory_order_relaxed);
@@ -792,6 +903,8 @@ namespace
 #ifdef __SWITCH2__
 		for (auto& device : rumble)
 			SendRumble(device, 0);
+		if (guest_rumble)
+			nx2GameShareSetGuestRumble(0.0f, 0.0f);
 #endif
 	}
 

@@ -962,6 +962,11 @@ bool VKSwapChain::CreateSwapChain()
 		Console.Error("Vulkan: Swap chain does not support usage as color attachment");
 		return false;
 	}
+#ifdef __SWITCH2__
+	// GameShare's guest screen copies the presented image
+	if (surface_capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
+		image_usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+#endif
 
 	// Store the old/current swap chain when recreating for resize
 	// Old swap chain is destroyed regardless of whether the create call succeeds

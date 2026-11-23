@@ -2160,11 +2160,18 @@ void GSDeviceVK::SubmitCommandBuffer(VKSwapChain* present_swap_chain)
 	const bool signal_spin = spin_cycles != 0 && !m_spin_queue_is_graphics_queue;
 
 	uint32_t wait_bits = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	VkSemaphore semas[2];
+	VkSemaphore semas[3];
 	VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
 	submit_info.commandBufferCount = resources.init_buffer_used ? 2u : 1u;
 	submit_info.pCommandBuffers =
 		resources.init_buffer_used ? resources.command_buffers.data() : &resources.command_buffers[1];
+#ifdef __SWITCH2__
+	// GameShare's guest screen: the copy waits for the guest image's acquire, and its present for the copy
+	const bool guest_present = present_swap_chain && std::exchange(m_guest.pending, false);
+	VkSemaphore guest_waits[2];
+	VkPipelineStageFlags guest_wait_stages[2] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		VK_PIPELINE_STAGE_TRANSFER_BIT};
+#endif
 
 	if (present_swap_chain)
 	{
@@ -2184,6 +2191,22 @@ void GSDeviceVK::SubmitCommandBuffer(VKSwapChain* present_swap_chain)
 			submit_info.pSignalSemaphores = present_swap_chain->GetRenderingFinishedSemaphorePtr();
 			submit_info.signalSemaphoreCount = 1;
 		}
+#ifdef __SWITCH2__
+		if (guest_present)
+		{
+			guest_waits[0] = present_swap_chain->GetImageAvailableSemaphore();
+			guest_waits[1] = m_guest.acquired[m_current_frame];
+			submit_info.pWaitSemaphores = guest_waits;
+			submit_info.waitSemaphoreCount = 2;
+			submit_info.pWaitDstStageMask = guest_wait_stages;
+			semas[0] = present_swap_chain->GetRenderingFinishedSemaphore();
+			if (signal_spin)
+				semas[1] = m_spin_resources[m_current_frame].semaphore;
+			semas[submit_info.signalSemaphoreCount] = m_guest.rendered[m_guest.image_index];
+			submit_info.signalSemaphoreCount++;
+			submit_info.pSignalSemaphores = semas;
+		}
+#endif
 	}
 	else if (signal_spin)
 	{
@@ -2210,6 +2233,15 @@ void GSDeviceVK::SubmitCommandBuffer(VKSwapChain* present_swap_chain)
 
 	if (spin_cycles != 0)
 		SubmitSpinCommand(m_current_frame, spin_cycles);
+
+#ifdef __SWITCH2__
+	if (guest_present)
+	{
+		const VkPresentInfoKHR guest_info = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, nullptr, 1,
+			&m_guest.rendered[m_guest.image_index], 1, &m_guest.swapchain, &m_guest.image_index, nullptr};
+		vkQueuePresentKHR(m_present_queue, &guest_info);
+	}
+#endif
 
 	if (present_swap_chain)
 	{
@@ -3368,6 +3400,9 @@ void GSDeviceVK::Destroy()
 		RemotePlayRelease(true);
 #endif
 
+#ifdef __SWITCH2__
+	CloseGuestScreen();
+#endif
 	m_swap_chain.reset();
 
 	if (m_device != VK_NULL_HANDLE)
@@ -3872,6 +3907,9 @@ void GSDeviceVK::EndPresent()
 
 	m_swap_chain->GetCurrentTexture()->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::PresentSrc);
 	g_perfmon.Put(GSPerfMon::RenderPasses, 1);
+#ifdef __SWITCH2__
+	RecordGuestCopy(cmdbuffer);
+#endif
 
 	// Frame generation takes the game's own image instead of the finished screen when the present
 	// was only the plain scaled blit, which it can repeat for each generated frame (the ImGui overlay
@@ -3910,6 +3948,151 @@ void GSDeviceVK::EndPresent()
 
 	InvalidateCachedState();
 }
+
+#ifdef __SWITCH2__
+bool GSDeviceVK::OpenGuestScreen(void* window)
+{
+	CloseGuestScreen();
+	WindowInfo wi;
+	wi.type = WindowInfo::Type::VI;
+	wi.window_handle = window;
+	m_guest.surface = VKSwapChain::CreateVulkanSurface(m_instance, m_physical_device, &wi);
+	if (m_guest.surface == VK_NULL_HANDLE)
+		return false;
+
+	VkBool32 present_supported = VK_FALSE;
+	VkSurfaceCapabilitiesKHR caps = {};
+	u32 format_count = 0;
+	if (vkGetPhysicalDeviceSurfaceSupportKHR(m_physical_device, m_present_queue_family_index, m_guest.surface,
+			&present_supported) != VK_SUCCESS || !present_supported ||
+		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physical_device, m_guest.surface, &caps) != VK_SUCCESS ||
+		!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) ||
+		vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_guest.surface, &format_count, nullptr) != VK_SUCCESS ||
+		format_count == 0)
+	{
+		Console.Error("Vulkan: the GameShare guest's window cannot be presented to.");
+		CloseGuestScreen();
+		return false;
+	}
+	std::vector<VkSurfaceFormatKHR> formats(format_count);
+	vkGetPhysicalDeviceSurfaceFormatsKHR(m_physical_device, m_guest.surface, &format_count, formats.data());
+	VkSurfaceFormatKHR format = formats[0];
+	for (const VkSurfaceFormatKHR& candidate : formats)
+	{
+		if (candidate.format == VK_FORMAT_R8G8B8A8_UNORM || candidate.format == VK_FORMAT_B8G8R8A8_UNORM)
+		{
+			format = candidate;
+			break;
+		}
+	}
+	m_guest.extent = caps.currentExtent;
+	if (m_guest.extent.width == UINT32_MAX || m_guest.extent.width == 0)
+		m_guest.extent = {1280, 720};
+	u32 image_count = std::max(caps.minImageCount, 3u);
+	if (caps.maxImageCount)
+		image_count = std::min(image_count, caps.maxImageCount);
+
+	VkSwapchainCreateInfoKHR info = {VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+	info.surface = m_guest.surface;
+	info.minImageCount = image_count;
+	info.imageFormat = format.format;
+	info.imageColorSpace = format.colorSpace;
+	info.imageExtent = m_guest.extent;
+	info.imageArrayLayers = 1;
+	info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	info.preTransform = caps.currentTransform;
+	info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+	info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+	info.clipped = VK_TRUE;
+	const VkResult res = vkCreateSwapchainKHR(m_device, &info, nullptr, &m_guest.swapchain);
+	if (res != VK_SUCCESS)
+	{
+		LOG_VULKAN_ERROR(res, "vkCreateSwapchainKHR (GameShare guest) failed: ");
+		m_guest.swapchain = VK_NULL_HANDLE;
+		CloseGuestScreen();
+		return false;
+	}
+	u32 count = 0;
+	vkGetSwapchainImagesKHR(m_device, m_guest.swapchain, &count, nullptr);
+	m_guest.images.resize(count);
+	vkGetSwapchainImagesKHR(m_device, m_guest.swapchain, &count, m_guest.images.data());
+	const VkSemaphoreCreateInfo semaphore_info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+	m_guest.rendered.assign(count, VK_NULL_HANDLE);
+	bool ok = true;
+	for (VkSemaphore& semaphore : m_guest.rendered)
+		ok = ok && vkCreateSemaphore(m_device, &semaphore_info, nullptr, &semaphore) == VK_SUCCESS;
+	for (VkSemaphore& semaphore : m_guest.acquired)
+		ok = ok && vkCreateSemaphore(m_device, &semaphore_info, nullptr, &semaphore) == VK_SUCCESS;
+	if (!ok)
+	{
+		CloseGuestScreen();
+		return false;
+	}
+	Console.WriteLn("Vulkan: GameShare guest screen %ux%u, %u images.", m_guest.extent.width, m_guest.extent.height,
+		count);
+	return true;
+}
+
+void GSDeviceVK::CloseGuestScreen()
+{
+	if (m_guest.surface == VK_NULL_HANDLE)
+		return;
+	vkDeviceWaitIdle(m_device);
+	for (VkSemaphore semaphore : m_guest.rendered)
+	{
+		if (semaphore != VK_NULL_HANDLE)
+			vkDestroySemaphore(m_device, semaphore, nullptr);
+	}
+	for (VkSemaphore semaphore : m_guest.acquired)
+	{
+		if (semaphore != VK_NULL_HANDLE)
+			vkDestroySemaphore(m_device, semaphore, nullptr);
+	}
+	if (m_guest.swapchain != VK_NULL_HANDLE)
+		vkDestroySwapchainKHR(m_device, m_guest.swapchain, nullptr);
+	vkDestroySurfaceKHR(m_instance, m_guest.surface, nullptr);
+	m_guest = {};
+}
+
+void GSDeviceVK::RecordGuestCopy(VkCommandBuffer cmdbuffer)
+{
+	if (m_guest.swapchain == VK_NULL_HANDLE)
+		return;
+	// No image free (the guest's display shows them slower): this frame is not copied
+	u32 index = 0;
+	const VkResult res = vkAcquireNextImageKHR(m_device, m_guest.swapchain, 0, m_guest.acquired[m_current_frame],
+		VK_NULL_HANDLE, &index);
+	if ((res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) || index >= m_guest.images.size())
+		return;
+
+	GSTextureVK* const host = m_swap_chain->GetCurrentTexture();
+	host->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::TransferSrc);
+	const VkImage guest = m_guest.images[index];
+	const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+	VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, nullptr, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_QUEUE_FAMILY_IGNORED,
+		VK_QUEUE_FAMILY_IGNORED, guest, range};
+	vkCmdPipelineBarrier(cmdbuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+		nullptr, 1, &barrier);
+	VkImageBlit blit = {};
+	blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	blit.srcOffsets[1] = {host->GetWidth(), host->GetHeight(), 1};
+	blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	blit.dstOffsets[1] = {static_cast<s32>(m_guest.extent.width), static_cast<s32>(m_guest.extent.height), 1};
+	vkCmdBlitImage(cmdbuffer, host->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, guest,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+	barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	barrier.dstAccessMask = 0;
+	barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	vkCmdPipelineBarrier(cmdbuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
+		nullptr, 0, nullptr, 1, &barrier);
+	host->TransitionToLayout(cmdbuffer, GSTextureVK::Layout::PresentSrc);
+	m_guest.image_index = index;
+	m_guest.pending = true;
+}
+#endif
 
 bool GSDeviceVK::IsPresenting() const
 {

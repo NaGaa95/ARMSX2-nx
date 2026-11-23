@@ -2358,6 +2358,15 @@ public:
 	/// keeps this no-op and never sets GSRemotePlay::g_renderer_captures.
 	virtual void RemotePlayVSync(GSTexture* src, const GSVector4& src_uv, const GSVector4& area) {}
 
+#ifdef __SWITCH2__
+	/// GameShare's guest screen: a second swapchain on the guest's window (an NWindow*) that gets a copy of every
+	/// presented frame, quick menu included. Called on the GS thread. A renderer that cannot present there keeps the
+	/// defaults, and the guest then mirrors the console's screen.
+	virtual bool SupportsGuestScreen() const { return false; }
+	virtual bool OpenGuestScreen(void* window) { return false; }
+	virtual void CloseGuestScreen() {}
+#endif
+
 	bool ResizeRenderTarget(GSTexture** t, int w, int h, bool preserve_contents, bool recycle);
 
 	void AgePool();

@@ -48,6 +48,11 @@ public:
 
 	std::string GetDriverInfo() const override;
 	bool SetGPUTimingEnabled(bool enabled) override;
+#ifdef __SWITCH2__
+	bool SupportsGuestScreen() const override { return true; }
+	bool OpenGuestScreen(void* window) override;
+	void CloseGuestScreen() override;
+#endif
 	float GetAndResetAccumulatedGPUTime() override;
 	bool SetGPUPipelineStatisticsEnabled(bool enabled) override { return false; }
 	GPUPipelineStatistics GetAndResetAccumulatedGPUPipelineStatistics() override { return {}; }
@@ -375,6 +380,17 @@ private:
 	void UpdateFrameGenerationDisplay();
 	void SubmitGeneratedFrame();
 	bool PresentFrameGenerationImage(const DkImage& image, bool last);
+	// GameShare's guest screen: the frame's final image scaled into the guest's swapchain (recorded in the frame's
+	// commands; -1 without a guest screen), then presented once the frame is submitted
+	int RecordGuestCopy(const DkImage& source);
+	void PresentGuestCopy(int slot);
+
+	static constexpr u32 NUM_GUEST_FRAMEBUFFERS = 2;
+	DkSwapchain m_guest_swapchain = nullptr;
+	DkMemBlock m_guest_memblock = nullptr;
+	DkImage m_guest_framebuffers[NUM_GUEST_FRAMEBUFFERS] = {};
+	u32 m_guest_width = 0;
+	u32 m_guest_height = 0;
 	void DestroyFrameGeneration();
 	void StopFrameGenerationPreparation();
 

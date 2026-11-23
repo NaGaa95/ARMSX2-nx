@@ -1032,6 +1032,7 @@ void GSDeviceDK::DestroySwapchain()
 void GSDeviceDK::DestroyDeviceObjects()
 {
 #ifdef __SWITCH2__
+	CloseGuestScreen();
 	StopFrameGenerationPreparation();
 	DestroyFrameGeneration();
 	SwitchLSFG_SetStatus(false, false);
@@ -1467,11 +1468,17 @@ void GSDeviceDK::SubmitFrame()
 		return;
 	}
 #endif
+#ifdef __SWITCH2__
+	const int guest_slot = m_present_slot >= 0 ? RecordGuestCopy(m_framebuffers[m_present_slot]) : -1;
+#endif
 	SubmitFrameCommands();
 	if (m_present_slot >= 0)
 		dkQueuePresentImage(m_queue, m_swapchain, m_present_slot);
 	else
 		dkQueueFlush(m_queue);
+#ifdef __SWITCH2__
+	PresentGuestCopy(guest_slot);
+#endif
 
 	m_present_slot = -1;
 	m_frame_active = false;
@@ -1676,6 +1683,8 @@ void GSDeviceDK::SubmitGeneratedFrame()
 	SwitchLSFG_SetStatus(!m_lsfg_failed, decision.highRate, m_lsfg_preparing);
 	nx2DisplayApply(generated || m_vsync_mode != GSVSyncMode::Disabled ? 1 : 0);
 
+	// (the guest gets the real frame only)
+	const int guest_slot = RecordGuestCopy(m_lsfg_display);
 	const u64 present_start = MonotonicNs();
 	bool presented = !generated || PresentFrameGenerationImage(*m_lsfg_generator->GeneratedImage(), false);
 	presented = presented && PresentFrameGenerationImage(m_lsfg_display, true);
@@ -1686,8 +1695,95 @@ void GSDeviceDK::SubmitGeneratedFrame()
 		SubmitFrameCommands();
 		dkQueueFlush(m_queue);
 	}
+	PresentGuestCopy(guest_slot);
 	m_present_slot = -1;
 	m_frame_active = false;
+}
+
+bool GSDeviceDK::OpenGuestScreen(void* window)
+{
+	CloseGuestScreen();
+	NWindow* const guest_window = static_cast<NWindow*>(window);
+	if (!m_device || !guest_window || R_FAILED(nwindowGetDimensions(guest_window, &m_guest_width, &m_guest_height)) ||
+		!m_guest_width || !m_guest_height)
+		return false;
+
+	DkImageLayoutMaker layout_maker;
+	dkImageLayoutMakerDefaults(&layout_maker, m_device);
+	layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine;
+	layout_maker.format = DkImageFormat_RGBA8_Unorm;
+	layout_maker.dimensions[0] = m_guest_width;
+	layout_maker.dimensions[1] = m_guest_height;
+	DkImageLayout layout;
+	dkImageLayoutInitialize(&layout, &layout_maker);
+	const u32 align = dkImageLayoutGetAlignment(&layout);
+	const u32 size = (static_cast<u32>(dkImageLayoutGetSize(&layout)) + align - 1) & ~(align - 1);
+
+	DkMemBlockMaker memblock_maker;
+	dkMemBlockMakerDefaults(&memblock_maker, m_device, NUM_GUEST_FRAMEBUFFERS * size);
+	memblock_maker.flags = DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
+	m_guest_memblock = dkMemBlockCreate(&memblock_maker);
+	if (!m_guest_memblock)
+		return false;
+	const DkImage* images[NUM_GUEST_FRAMEBUFFERS];
+	for (u32 i = 0; i < NUM_GUEST_FRAMEBUFFERS; i++)
+	{
+		dkImageInitialize(&m_guest_framebuffers[i], &layout, m_guest_memblock, i * size);
+		images[i] = &m_guest_framebuffers[i];
+	}
+	// (the guest's window paces itself: no nx2 display pacing here)
+	DkSwapchainMaker swapchain_maker;
+	dkSwapchainMakerDefaults(&swapchain_maker, m_device, guest_window, images, NUM_GUEST_FRAMEBUFFERS);
+	m_guest_swapchain = dkSwapchainCreate(&swapchain_maker);
+	if (!m_guest_swapchain)
+	{
+		CloseGuestScreen();
+		return false;
+	}
+	Console.WriteLn("DK3D: GameShare guest screen %ux%u.", m_guest_width, m_guest_height);
+	return true;
+}
+
+void GSDeviceDK::CloseGuestScreen()
+{
+	if (!m_guest_swapchain && !m_guest_memblock)
+		return;
+	if (m_queue)
+		dkQueueWaitIdle(m_queue);
+	if (m_guest_swapchain)
+	{
+		dkSwapchainDestroy(m_guest_swapchain);
+		m_guest_swapchain = nullptr;
+	}
+	if (m_guest_memblock)
+	{
+		dkMemBlockDestroy(m_guest_memblock);
+		m_guest_memblock = nullptr;
+	}
+}
+
+int GSDeviceDK::RecordGuestCopy(const DkImage& source)
+{
+	if (!m_guest_swapchain || dkQueueIsInErrorState(m_queue))
+		return -1;
+	const int slot = dkQueueAcquireImage(m_queue, m_guest_swapchain);
+	if (slot < 0 || slot >= static_cast<int>(NUM_GUEST_FRAMEBUFFERS))
+		return -1;
+	DkImageView source_view, destination;
+	dkImageViewDefaults(&source_view, &source);
+	dkImageViewDefaults(&destination, &m_guest_framebuffers[slot]);
+	const DkImageRect source_rect = {0, 0, 0, static_cast<u32>(m_present_width), static_cast<u32>(m_present_height), 1};
+	const DkImageRect guest_rect = {0, 0, 0, m_guest_width, m_guest_height, 1};
+	IssueBarrier(DkBarrier_Full, DkInvalidateFlags_Image);
+	dkCmdBufBlitImage(m_cmdbuf, &source_view, &source_rect, &destination, &guest_rect, DkBlitFlag_FilterLinear, 0);
+	m_copy_engine_busy = true;
+	return slot;
+}
+
+void GSDeviceDK::PresentGuestCopy(int slot)
+{
+	if (slot >= 0 && m_guest_swapchain)
+		dkQueuePresentImage(m_queue, m_guest_swapchain, slot);
 }
 
 void GSDeviceDK::DestroyFrameGeneration()

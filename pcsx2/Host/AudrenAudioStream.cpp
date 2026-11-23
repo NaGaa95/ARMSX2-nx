@@ -10,6 +10,7 @@
 #include "common/Error.h"
 #include "common/Threading.h"
 
+#include "nx2_gameshare.h"
 #include "switch_audren.h"
 
 #include <algorithm>
@@ -63,6 +64,8 @@ void AudrenAudioStream::FillBuffer(s16* out)
 		const float f = std::clamp(m_float_scratch[i], -1.0f, 1.0f);
 		out[i] = static_cast<s16>(std::lrintf(f * 32767.0f));
 	}
+	// GameShare's guest with a screen of its own hears the game too
+	nx2GameShareWriteGuestAudioRate(out, BUFFER_FRAMES, m_sample_rate);
 }
 
 void AudrenAudioStream::ThreadEntry()

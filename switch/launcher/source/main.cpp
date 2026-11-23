@@ -489,6 +489,8 @@ static const SettingHelpEntry SETTING_HELP[] = {
    "Selects the language used by the launcher. System follows the language configured on the Switch. Game names, paths, server messages and user-entered text are never translated."},
 #ifdef __SWITCH2__
   {CPU_BOOST_KEY, "Console clocks", "Keeps CPU boost active throughout the game. It raises the CPU clock and lowers the GPU clock. The quick menu can change it for the current session."},
+  {GAMESHARE_SWAP_KEY, "GameShare",
+   "Press Minus on a game to play it with another Nintendo Switch or Switch 2 console. Chooses which controller the other console plays: controller 2, or controller 1 while this console's controller becomes controller 2. The quick menu of either console can change it during play."},
 #endif
   {AUDIO_BACKEND_KEY, "Audio backend",
    "audren plays the sound through the console's audio renderer, which resamples and mixes it on the audio DSP. audout is the older output that the CPU feeds directly; use it if a game has no sound or crackles with audren."},
@@ -1266,7 +1268,7 @@ static SDL_Texture *makeFlagTex(int region,int W,int H){
 static void makeFlags(){ g_flag[1]=makeFlagTex(1,36,24); g_flag[2]=makeFlagTex(2,36,24); g_flag[3]=makeFlagTex(3,36,24); }
 
 static SDL_Texture *g_gA=nullptr,*g_gB=nullptr,*g_gX=nullptr,*g_gY=nullptr,
-                   *g_gPlus=nullptr,
+                   *g_gPlus=nullptr,*g_gMinus=nullptr,
                    *g_gLeftRight=nullptr,*g_gUpDown=nullptr,*g_gTouch=nullptr;
 static SDL_Texture *g_settingsIcon=nullptr;
 // Supersampling keeps the downscaled glyphs crisp.
@@ -1300,7 +1302,7 @@ static SDL_Texture *makeGlyph(const char *label, bool pill){
 static void makeGlyphs(){
   g_gA=makeGlyph("A",false); g_gB=makeGlyph("B",false);
   g_gX=makeGlyph("X",false); g_gY=makeGlyph("Y",false);
-  g_gPlus=makeGlyph("+",false);
+  g_gPlus=makeGlyph("+",false); g_gMinus=makeGlyph("-",false);
   g_gLeftRight=makeGlyph("< >",true); g_gUpDown=makeGlyph("^ v",true);
   g_gTouch=makeGlyph("Touch",true);
   g_settingsIcon=IMG_LoadTexture(g_ren,"romfs:/icons/settings.svg");
@@ -1315,6 +1317,7 @@ static SDL_Texture *buttonGlyph(const char *button){
   if(!strcmp(button,"X")) return g_gX;
   if(!strcmp(button,"Y")) return g_gY;
   if(!strcmp(button,"+")) return g_gPlus;
+  if(!strcmp(button,"-")) return g_gMinus;
   if(!strcmp(button,"Left / Right")) return g_gLeftRight;
   if(!strcmp(button,"Up / Down")) return g_gUpDown;
   if(!strcmp(button,"Touch")) return g_gTouch;
@@ -1443,7 +1446,8 @@ static void drawFooterHints(const FootItem *it,int n,int cy){
           !strcmp(button,"B")?BTN_CANCEL:
           !strcmp(button,"X")?BTN_X:
           !strcmp(button,"Y")?BTN_Y:
-          !strcmp(button,"+")?SDL_CONTROLLER_BUTTON_START:-1;
+          !strcmp(button,"+")?SDL_CONTROLLER_BUTTON_START:
+          !strcmp(button,"-")?SDL_CONTROLLER_BUTTON_BACK:-1;
         g_footN++;
       }
       if(i+1<layout.rowEnd[row]) x+=layout.gapAfter[i];
@@ -1451,9 +1455,15 @@ static void drawFooterHints(const FootItem *it,int n,int cy){
   }
 }
 // Shared by renderGrid (to draw) and gridLayout (to reserve the right height).
+#ifdef __SWITCH2__
+static std::array<FootItem,4> libraryFooter(){
+  return {{{"A","Launch"},{"Y","Game menu"},{"-","GameShare"},{"B","Quit"}}};
+}
+#else
 static std::array<FootItem,3> libraryFooter(){
   return {{{"A","Launch"},{"Y","Game menu"},{"B","Quit"}}};
 }
+#endif
 
 static void drawSettingsFooter(const char *text,int cy=-1){
   if(!text||!text[0]) return;
@@ -5630,10 +5640,18 @@ static bool ensureEmu(const char *core) {
 // The core's handoff: [Launch] Path (the game) and Launcher (this NRO, chainloaded when the game ends). The core reads
 // it once and deletes it.
 // The game's own settings follow [Launch] in the handoff; the core puts them above the game database.
+#ifdef __SWITCH2__
+// Minus on a game: it starts with a GameShare session, another console playing one of its controllers
+static bool g_gameShareRequested=false;
+#endif
+
 static bool writeLaunchHandoff(const std::string &gamePath,const Store &overrides) {
   if(gamePath.find_first_of("\r\n")!=std::string::npos||g_launcherNroPath.find_first_of("\r\n")!=std::string::npos)
     return false;
   std::string text="[Launch]\nPath = "+gamePath+"\nLauncher = "+g_launcherNroPath+"\n";
+#ifdef __SWITCH2__
+  if(g_gameShareRequested) text+="GameShare = true\n";
+#endif
   std::vector<std::pair<std::string,std::string>> sections;
   for(const auto &entry:overrides.kv){
     // A setting a screen shows (CPU Boost and the account are global only), or a clamping mode's switches.
@@ -6106,7 +6124,7 @@ static void cleanupLauncher() {
   for(auto &game:g_games) releaseGameArtwork(game);
   clearTextCaches();
   for(int index=1;index<4;index++){ if(g_flag[index]) SDL_DestroyTexture(g_flag[index]); g_flag[index]=nullptr; }
-  SDL_Texture **glyphs[]={&g_gA,&g_gB,&g_gX,&g_gY,&g_gPlus,
+  SDL_Texture **glyphs[]={&g_gA,&g_gB,&g_gX,&g_gY,&g_gPlus,&g_gMinus,
                           &g_gLeftRight,&g_gUpDown,&g_gTouch,&g_settingsIcon};
   for(SDL_Texture **glyph:glyphs){ if(*glyph) SDL_DestroyTexture(*glyph); *glyph=nullptr; }
   if(g_logo) SDL_DestroyTexture(g_logo);
@@ -6294,6 +6312,19 @@ int main(int argc, char **argv){
 
   if(g_griddbReady&&strcmp(storeGet(g_global,"Wrapper/CheckUpdatesAtBoot","true"),"false")!=0)
     LauncherUpdate_StartCheck(installedReleaseTag());
+#ifdef __SWITCH2__
+  // Minus: the highlighted game with another Nintendo Switch or Switch 2 console as one of its players
+  auto requestGameShare=[&](Game &game){
+    if(!confirmBox(tr("GameShare"),{game.title,
+         tr("Play this game with another Nintendo Switch or Nintendo Switch 2 console?"),
+         "",
+         tr("kaiHEN must be running in a game that supports GameShare.")})){
+      beginScreenFx(); return;
+    }
+    g_gameShareRequested=true;
+    selectGame(game);
+  };
+#endif
   auto changeLibraryTab=[&](int tab){
     selectLibraryTab(tab,sel);
     keepLibrarySelection=true;
@@ -6432,6 +6463,11 @@ libraryLoop:
             beginScreenFx();
           }
           break;
+#ifdef __SWITCH2__
+        case SDL_CONTROLLER_BUTTON_BACK:
+          if(!g_libraryHeaderFocused) if(Game *game=visibleGame(sel)) requestGameShare(*game);
+          break;
+#endif
         case BTN_CANCEL:
           if(g_libraryHeaderFocused) g_libraryHeaderFocused=false;
           else if(confirmBox(tr("Exit ARMSX2-nx?"),
@@ -6474,6 +6510,9 @@ libraryLoop:
     nx2SetCpuBoost(false);
     launch=false;
     running=true;
+#ifdef __SWITCH2__
+    g_gameShareRequested=false;
+#endif
     goto libraryLoop;
   }
 
