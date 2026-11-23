@@ -1580,6 +1580,10 @@ endif()
 if(HORIZON)
 	list(APPEND pcsx2HostSources
 		Host/AudoutAudioStream.cpp)
+	if(NINTENDO_SWITCH2)
+		list(APPEND pcsx2HostSources
+			Host/AudrenAudioStream.cpp)
+	endif()
 	list(APPEND pcsx2Sources
 		Android/AndroidPcapStubs.cpp)
 endif()

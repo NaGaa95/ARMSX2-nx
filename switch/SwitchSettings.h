@@ -109,6 +109,7 @@ inline constexpr Choice C_cas[]      = { {"Off","0"}, {"Sharpen only","1"}, {"Sh
 inline constexpr Choice C_hwdl[]     = { {"Accurate","0"}, {"Accurate, full","1"}, {"Disable readbacks","2"},
                                      {"Unsynchronized","3"}, {"Disabled","4"}, {"Asynchronous","5"} };
 inline constexpr Choice C_sync[]     = { {"TimeStretch","TimeStretch"}, {"Off","Disabled"} };
+inline constexpr Choice C_audio_backend[] = { {"audren","Audren"}, {"audout","Audout"} };
 inline constexpr Choice C_eecr[]     = { {"50%","-3"}, {"60%","-2"}, {"75%","-1"}, {"100%","0"}, {"130%","1"}, {"180%","2"}, {"300%","3"} };
 inline constexpr Choice C_eecs[]     = { {"Off","0"}, {"Mild","1"}, {"Moderate","2"}, {"Maximum","3"} };
 inline constexpr Choice C_rounding[] = { {"Nearest","0"}, {"Negative","1"}, {"Positive","2"}, {"Chop / Zero","3"} };
@@ -308,8 +309,10 @@ inline constexpr Opt S_gs_fixes[] = {
   O_HW_FIX("Native palette draws", "EmuCore/GS/UserHacks_NativePaletteDraw", C_bool, "false"),
   O_HW_FIX("Native counter draws", "EmuCore/GS/UserHacks_NativeCounterDraws", C_bool, "false"),
 };
-// Audout plays stereo only, so no output backend or surround choice.
+// audren and audout play stereo only, so no surround choice. The backend is chosen at boot.
+inline constexpr char AUDIO_BACKEND_KEY[] = "SPU2/Output/Backend";
 inline constexpr Opt S_audio[] = {
+  O_BOOT("Audio backend", AUDIO_BACKEND_KEY, C_audio_backend, "Audren"),
   O_SCALED_RANGE("Volume", "SPU2/Output/StandardVolume", 0, 200, 5, "100", 1, "%"),
   O_SCALED_RANGE("Fast-forward volume", "SPU2/Output/FastForwardVolume", 0, 200, 5, "100", 1, "%"),
   O_BOOL("Mute", "SPU2/Output/OutputMuted", "false"),

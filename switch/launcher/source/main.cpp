@@ -490,6 +490,8 @@ static const SettingHelpEntry SETTING_HELP[] = {
 #ifdef __SWITCH2__
   {CPU_BOOST_KEY, "Console clocks", "Keeps CPU boost active throughout the game. It raises the CPU clock and lowers the GPU clock. The quick menu can change it for the current session."},
 #endif
+  {AUDIO_BACKEND_KEY, "Audio backend",
+   "audren plays the sound through the console's audio renderer, which resamples and mixes it on the audio DSP. audout is the older output that the CPU feeds directly; use it if a game has no sound or crackles with audren."},
   {FRAMEGEN_KEY, "Frame generation",
    "Generates one intermediate display frame for each real frame to target a smoother 2x presentation. It does not increase emulation speed and may add artifacts or latency. Available with Vulkan and Drako3D. Open the in-game quick menu with L + R + Plus to turn generated frames on or off. On Vulkan, having it on here costs some GPU time in every game, even with generated frames off."},
   {FRAMEGEN_FLOW_KEY, "Frame generation quality",
