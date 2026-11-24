@@ -53,10 +53,52 @@ endforeach()
 include(ExternalProject)
 set(_uam_host_dir "${CMAKE_BINARY_DIR}/uam-host")
 set(UAM_EXE "${_uam_host_dir}/uam")
+
+# uam's meson.build checks Mako's version with distutils.version.StrictVersion, and Python 3.12 removed distutils:
+# that check gets a StrictVersion of its own on PYTHONPATH (a Windows path for MSYS2's native Pythons).
+set(_uam_python_shim "${CMAKE_BINARY_DIR}/uam-host-python")
+file(WRITE "${_uam_python_shim}/distutils/__init__.py" "")
+file(WRITE "${_uam_python_shim}/distutils/version.py" [=[
+class StrictVersion:
+    def __init__(self, version):
+        self.version = tuple(int(part) for part in version.split(".")[:3] if part.isdigit())
+    def __gt__(self, other):
+        return self.version > other.version
+    def __ge__(self, other):
+        return self.version >= other.version
+    def __lt__(self, other):
+        return self.version < other.version
+    def __le__(self, other):
+        return self.version <= other.version
+    def __eq__(self, other):
+        return self.version == other.version
+]=])
+# The host compilers, by absolute path: meson records the ones it finds at configure, and the build step's PATH (MSYS2's
+# tools first) would otherwise resolve them to the MSYS runtime's gcc, which cannot build uam.
+find_program(UAM_HOST_CC NAMES clang cc gcc PATHS /clangarm64/bin /ucrt64/bin /mingw64/bin /usr/local/bin /usr/bin
+	NO_DEFAULT_PATH)
+find_program(UAM_HOST_CXX NAMES clang++ c++ g++ PATHS /clangarm64/bin /ucrt64/bin /mingw64/bin /usr/local/bin /usr/bin
+	NO_DEFAULT_PATH)
+if(NOT UAM_HOST_CC OR NOT UAM_HOST_CXX)
+	message(FATAL_ERROR "No host C/C++ compiler for uam: set UAM_HOST_CC and UAM_HOST_CXX")
+endif()
+
+set(_uam_python_path "${_uam_python_shim}")
+set(_uam_host_cc "${UAM_HOST_CC}")
+set(_uam_host_cxx "${UAM_HOST_CXX}")
+find_program(_uam_cygpath NAMES cygpath)
+if(_uam_cygpath)
+	foreach(_var _uam_python_path _uam_host_cc _uam_host_cxx)
+		execute_process(COMMAND "${_uam_cygpath}" -m "${${_var}}" OUTPUT_VARIABLE ${_var} OUTPUT_STRIP_TRAILING_WHITESPACE)
+	endforeach()
+endif()
+message(STATUS "uam host compilers: ${_uam_host_cc}, ${_uam_host_cxx}")
+
 ExternalProject_Add(uam_host
 	SOURCE_DIR "${UAM_ROOT}"
 	BINARY_DIR "${_uam_host_dir}"
-	CONFIGURE_COMMAND "${CMAKE_COMMAND}" -E env --unset=CC --unset=CXX
+	CONFIGURE_COMMAND "${CMAKE_COMMAND}" -E env "CC=${_uam_host_cc}" "CXX=${_uam_host_cxx}"
+		"PYTHONPATH=${_uam_python_path}"
 		"${UAM_MESON}" setup --buildtype=release "${_uam_host_dir}" "${UAM_ROOT}"
 	BUILD_COMMAND "${CMAKE_COMMAND}" -E env --unset=CC --unset=CXX "${UAM_NINJA}" -C "${_uam_host_dir}"
 	INSTALL_COMMAND ""
