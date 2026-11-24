@@ -160,7 +160,7 @@ namespace Achievements
 	/// Draws ImGui overlays when not paused.
 	void DrawGameOverlays();
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	/// Clears all cached state used to render the UI.
 	void ClearUIState();
 
@@ -241,7 +241,7 @@ namespace Achievements
 	bool GetCurrentUserStats(UserStats* stats);
 	bool GetCurrentGameStats(GameStats* stats);
 	bool GetCurrentAchievementList(std::vector<AchievementInfo>* achievements);
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	struct LeaderboardInfo
 	{
 		u32 id;

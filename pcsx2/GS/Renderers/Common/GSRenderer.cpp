@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
 // SPDX-License-Identifier: GPL-3.0+
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 #include "ImGui/SwitchQuickMenu.h"
-#include "switch/lsfg/SwitchLSFG.h"
 #else
 #include "ImGui/FullscreenUI.h"
+#endif
+#ifdef __SWITCH2__
+#include "switch/lsfg/SwitchLSFG.h"
 #endif
 #include "ImGui/ImGuiManager.h"
 #include "GS/Renderers/Common/GSRenderer.h"
@@ -1028,7 +1030,7 @@ void GSRenderer::EndPresentFrame()
 	if (GSDumpReplayer::IsReplayingDump())
 		GSDumpReplayer::RenderUI();
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	SwitchQuickMenu::Render();
 #else
 	FullscreenUI::Render();

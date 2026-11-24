@@ -15,16 +15,8 @@
 #include "pcsx2/Config.h"
 #include "pcsx2/Host.h"
 #include "pcsx2/INISettingsInterface.h"
-#ifdef __SWITCH2__
 #include "pcsx2/ImGui/SwitchQuickMenu.h"
 #include "switch/SwitchSettings.h"
-#else
-#include "pcsx2/Catalog/CoverAutoDownload.h"
-#include "pcsx2/ImGui/FullscreenUI.h"
-#include "pcsx2/ImGui/ImGuiFullscreen.h"
-#include "pcsx2/ImGui/ImGuiManager.h"
-#include "pcsx2/Input/InputManager.h"
-#endif
 #include "pcsx2/MTGS.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SIO/Pad/PadDualshock2.h"
@@ -33,7 +25,7 @@
 #include "HorizonException.h"
 #include "HorizonHost.h"
 #include "HorizonThreadWrap.h"
-#ifndef __SWITCH2__
+#ifdef YADOKARI_USB_STORAGE
 #include "HorizonUsbStorage.h"
 #endif
 
@@ -95,7 +87,6 @@ extern "C" int __wrap_atexit(void (*function)(void))
 
 namespace
 {
-#ifdef __SWITCH2__
 	// ARMSX2-nx: the launcher (an SDL program of its own) picks the game and writes the settings, then chainloads the
 	// core of the renderer it was asked for with a handoff file naming the game and the launcher to return to.
 	constexpr const char* YADOKARI_ROOT = "sdmc:/switch/armsx2-nx";
@@ -104,28 +95,14 @@ namespace
 	constexpr const char* LAUNCH_HANDOFF_PATH = "sdmc:/switch/armsx2-nx/launch.ini";
 	// Why the game did not start, for the launcher to show (this core has no game list or landing page of its own).
 	constexpr const char* LAUNCH_ERROR_PATH = "sdmc:/switch/armsx2-nx/launch_error.txt";
-#else
-	constexpr const char* YADOKARI_ROOT = "sdmc:/switch/yadokari";
-	constexpr const char* GAMES_DIR = "sdmc:/switch/yadokari/games";
-	constexpr const char* LOGS_DIR = "sdmc:/switch/yadokari/logs";
-	constexpr const char* SETTINGS_PATH = "sdmc:/switch/yadokari/yadokari.ini";
-#endif
 	constexpr u64 IDLE_POLL_NS = 8'000'000ULL;
 
 	constexpr u64 INPUT_POLL_NS = 16'000'000ULL;
 	constexpr float STICK_DEADZONE = 0.15f;
 	constexpr u32 NUM_LOCAL_PLAYERS = 2;
-#ifdef __SWITCH2__
 	std::string s_launch_image;
 	std::unique_ptr<INISettingsInterface> s_launcher_game_settings;
 	std::string s_return_nro;
-#else
-	constexpr const char* USB_SETTINGS_SECTION = "Horizon";
-	constexpr const char* USB_GAME_ROOTS_KEY = "ManagedUsbGameRoots";
-	constexpr u64 MENU_COMBO = HidNpadButton_Plus | HidNpadButton_Minus;
-	std::atomic<u64> s_nav_snapshot{0};
-	void PumpMenuNav();
-#endif
 
 	std::unique_ptr<INISettingsInterface> s_settings_interface;
 	// Credentials (RetroAchievements' token, which PCSX2 moves out of the base settings into this layer).
@@ -175,7 +152,6 @@ namespace
 		}
 	}
 
-#ifdef __SWITCH2__
 	struct IniEntry
 	{
 		std::string section;
@@ -214,7 +190,6 @@ namespace
 		}
 		return entries;
 	}
-#endif
 
 	bool InitializeSettings()
 	{
@@ -224,17 +199,10 @@ namespace
 		if (!s_settings_interface->Load() || !VMManager::Internal::CheckSettingsVersion())
 		{
 			INFO_LOG("Initializing Switch settings at {}", SETTINGS_PATH);
-#ifdef __SWITCH2__
 			// The launcher may have written its settings before this core ever set the defaults: they win over them.
 			const std::vector<IniEntry> launcher_entries = ReadIniEntries(SETTINGS_PATH);
-#endif
 			VMManager::SetDefaultSettings(*s_settings_interface, true, true, true, true, true);
-#ifndef __SWITCH2__
-			s_settings_interface->SetBoolValue("UI", "EnableFullscreenUI", true);
-			s_settings_interface->AddToStringList("GameList", "RecursivePaths", GAMES_DIR);
-#endif
 			s_settings_interface->SetStringValue("Pad2", "Type", "DualShock2");
-#ifdef __SWITCH2__
 			for (const IniEntry& entry : launcher_entries)
 			{
 				if (entry.section != "UI" || entry.key != "SettingsVersion")
@@ -242,10 +210,8 @@ namespace
 			}
 			if (!launcher_entries.empty())
 				INFO_LOG("Kept {} settings the launcher wrote", launcher_entries.size());
-#endif
 		}
 
-#ifdef __SWITCH2__
 		// Each core has one GPU driver: the other core's renderer falls back to this core's (Software and Auto stay).
 		{
 #if defined(ARMSX2_DK3D)
@@ -266,7 +232,6 @@ namespace
 				s_settings_interface->SetIntValue("EmuCore/GS", "Renderer", native_renderer);
 			}
 		}
-#endif
 
 		Error error;
 		if (!s_settings_interface->Save(&error))
@@ -285,32 +250,7 @@ namespace
 		return true;
 	}
 
-#ifndef __SWITCH2__
-	bool SyncUsbGameRoots()
-	{
-		std::vector<std::string> roots;
-		for (const HorizonUsbStorage::Volume& volume : HorizonUsbStorage::GetVolumes())
-			roots.push_back(volume.root);
-
-		auto lock = Host::GetSettingsLock();
-		const std::vector<std::string> old_roots =
-			s_settings_interface->GetStringList(USB_SETTINGS_SECTION, USB_GAME_ROOTS_KEY);
-		if (roots == old_roots)
-			return false;
-
-		for (const std::string& root : old_roots)
-			s_settings_interface->RemoveFromStringList("GameList", "RecursivePaths", root.c_str());
-		for (const std::string& root : roots)
-			s_settings_interface->AddToStringList("GameList", "RecursivePaths", root.c_str());
-
-		s_settings_interface->SetStringList(USB_SETTINGS_SECTION, USB_GAME_ROOTS_KEY, roots);
-
-		Error error;
-		if (!s_settings_interface->Save(&error))
-			ERROR_LOG("Failed to save USB game roots: {}", error.GetDescription());
-		return true;
-	}
-
+#ifdef YADOKARI_USB_STORAGE
 	void LogUsbVolumes()
 	{
 		const std::vector<HorizonUsbStorage::Volume> volumes = HorizonUsbStorage::GetVolumes();
@@ -323,29 +263,8 @@ namespace
 		for (const HorizonUsbStorage::Volume& volume : volumes)
 			INFO_LOG("USB volume '{}' mounted at {} ({})", volume.label, volume.root, volume.filesystem);
 	}
+#endif
 
-	bool InitializeFullscreenUI()
-	{
-		if (!ImGuiManager::InitializeFullscreenUI())
-		{
-			ERROR_LOG("Failed to initialize FullscreenUI");
-			return false;
-		}
-
-		HorizonException::Breadcrumb("ImGuiManager::InitializeFullscreenUI ok; MTGS::WaitForOpen");
-		if (!MTGS::WaitForOpen())
-		{
-			ERROR_LOG("Failed to open the GS thread for FullscreenUI");
-			return false;
-		}
-		HorizonException::Breadcrumb("MTGS::WaitForOpen ok");
-
-		MTGS::RunOnGSThread([]() { MTGS::SetRunIdle(true); });
-		Host::RefreshGameListAsync(false);
-		return true;
-	}
-
-#else
 	// The launcher's handoff: [Launch] Path (the game) and Launcher (the NRO to chainload when it ends). Read once,
 	// then removed, so that starting the core again on its own does not boot the same game.
 	void ReadLaunchHandoff()
@@ -358,8 +277,10 @@ namespace
 		{
 			s_launch_image = handoff->GetStringValue("Launch", "Path", "");
 			s_return_nro = handoff->GetStringValue("Launch", "Launcher", "");
+#ifdef __SWITCH2__
 			// Minus on the game in the launcher: it starts with a GameShare session
 			nx2GameShareConfigure(handoff->GetBoolValue("Launch", "GameShare", false), false);
+#endif
 			s_launcher_game_settings = std::move(handoff);
 			auto lock = Host::GetSettingsLock();
 			Host::Internal::SetSwitchLaunchSettingsLayer(s_launcher_game_settings.get(), lock);
@@ -378,18 +299,24 @@ namespace
 		envSetNextLoad(s_return_nro.c_str(), s_return_nro.c_str());
 	}
 
-	// The launcher runs next in this process: the exit cleanup stops the threads nobody joined and releases the HOME
-	// lock, then drako3d's GPU client goes, and _Exit skips the static destructors (see __wrap_atexit).
+	// The launcher runs next in this process. On the Switch 2 the exit cleanup stops the threads nobody joined and
+	// releases the HOME lock, then drako3d's GPU client goes, and _Exit skips the static destructors (see
+	// __wrap_atexit); the Switch releases the HOME lock and ends as main returning would.
 	[[noreturn]] void ExitCore(int status)
 	{
 		Horizon::ShutdownNetwork();
 		// (_Exit skips the atexit handler that closes crash.txt and boot.txt)
 		HorizonException::Shutdown();
+#ifdef __SWITCH2__
 		nx2ExitReleaseLockLast();
 		nx2ExitCleanupNow();
 		if (void (*release)(void) = std::exchange(s_drako3d_atexit, nullptr))
 			release();
 		std::_Exit(status);
+#else
+		appletUnlockExit();
+		std::exit(status);
+#endif
 	}
 
 	// A core that cannot start: back to the launcher, which shows the reason.
@@ -400,9 +327,7 @@ namespace
 		ReturnToLauncher();
 		ExitCore(1);
 	}
-#endif
 
-#ifdef __SWITCH2__
 	// The game cannot start: back to the launcher, which shows the reason.
 	void ReportLaunchError(const std::string& message)
 	{
@@ -412,6 +337,7 @@ namespace
 		HorizonHost::RequestExit();
 	}
 
+#ifdef __SWITCH2__
 	// GameShare's guest screen, made and destroyed on the GS thread (GSDevice::OpenGuestScreen)
 	bool OpenGameShareScreen(void* window, int, int, void*)
 	{
@@ -466,18 +392,7 @@ namespace
 		const std::string message = error.IsValid() ? error.GetDescription() : "The virtual machine could not be started.";
 		ERROR_LOG("Failed to boot launch image: {} (result {})", message, static_cast<int>(result));
 
-#ifdef __SWITCH2__
 		ReportLaunchError(message);
-#else
-		if (FullscreenUI::IsInitialized())
-		{
-			MTGS::RunOnGSThread([message]() { ImGuiFullscreen::OpenInfoMessageDialog("Startup Error", message); });
-		}
-		else
-		{
-			HorizonHost::RequestExit();
-		}
-#endif
 	}
 
 	bool BootInitialImage(const char* image_path)
@@ -488,35 +403,15 @@ namespace
 		if (!FileSystem::FileExists(image_path))
 		{
 			ERROR_LOG("Launch image not found: {}", image_path);
-#ifdef __SWITCH2__
 			ReportLaunchError(fmt::format("The game file was not found:\n{}", image_path));
-#endif
 			return false;
 		}
 
 		VMBootParameters boot_params;
 		boot_params.filename = image_path;
 		auto hardcore_disable_callback = [](std::string reason, [[maybe_unused]] VMBootRestartCallback restart_callback) {
-#ifdef __SWITCH2__
 			ReportLaunchError(fmt::format("This game cannot start in RetroAchievements hardcore mode:\n{}\n"
 										  "Turn hardcore mode off in the launcher's RetroAchievements settings.", reason));
-#else
-			if (!FullscreenUI::IsInitialized())
-			{
-				ERROR_LOG("Launch image requires disabling RetroAchievements Hardcore Mode: {}", reason);
-				HorizonHost::RequestExit();
-				return;
-			}
-
-			MTGS::RunOnGSThread([reason = std::move(reason), restart_callback = std::move(restart_callback)]() mutable {
-				ImGuiFullscreen::OpenConfirmMessageDialog(Achievements::GetHardcoreModeDisableTitle(),
-					Achievements::GetHardcoreModeDisableText(reason.c_str()),
-					[restart_callback = std::move(restart_callback)](bool confirmed) mutable {
-						if (confirmed)
-							Host::RunOnCPUThread(std::move(restart_callback));
-					});
-			});
-#endif
 		};
 		auto done_callback = [](VMBootResult result, const Error& error) {
 #ifdef __SWITCH2__
@@ -533,44 +428,15 @@ namespace
 		return true;
 	}
 
-#ifndef __SWITCH2__
-	bool s_keyboard_shown_for_focus = false;
-
-	void ProcessSoftwareKeyboard()
-	{
-		if (!ImGuiManager::WantsTextInput())
-		{
-			s_keyboard_shown_for_focus = false;
-			return;
-		}
-
-		if (s_keyboard_shown_for_focus)
-			return;
-		s_keyboard_shown_for_focus = true;
-
-		HorizonHost::SoftwareKeyboardParameters params;
-		params.guide_text = "Enter text";
-		if (std::optional<std::string> text = HorizonHost::ShowSoftwareKeyboard(params); text.has_value())
-			ImGuiManager::AddTextInput(std::move(text.value()));
-	}
-#endif
-
 	void RunMainLoop()
 	{
 		while (appletMainLoop())
 		{
 			Host::PumpMessagesOnCPUThread();
 			ProcessAppletLifecycle();
-#ifndef __SWITCH2__
-			PumpMenuNav();
-			ProcessSoftwareKeyboard();
-
+#ifdef YADOKARI_USB_STORAGE
 			if (HorizonUsbStorage::ConsumeChange())
-			{
 				LogUsbVolumes();
-				if (SyncUsbGameRoots() && FullscreenUI::IsInitialized())
-					Host::RefreshGameListAsync(false);
-			}
 #endif
 
 			switch (VMManager::GetState())
@@ -604,7 +470,6 @@ namespace
 		HorizonHost::RequestExit();
 	}
 
-#ifdef __SWITCH2__
 	constexpr PadDualshock2::Inputs PS2_BUTTONS[] = {
 		PadDualshock2::Inputs::PAD_PRESSURE,
 		PadDualshock2::Inputs::PAD_UP, PadDualshock2::Inputs::PAD_DOWN,
@@ -675,62 +540,17 @@ namespace
 
 	PlayerSource GetPlayerSource(u32 player)
 	{
+#ifdef __SWITCH2__
 		if (!nx2GameShareActive())
 			return {false, player};
 		const u32 guest_player = nx2GameShareSwapRoles() ? 0 : 1;
 		if (player == guest_player)
 			return {true, 0};
 		return {false, player < guest_player ? player : player - 1};
-	}
 #else
-	struct ButtonMap
-	{
-		u64 nx;
-		PadDualshock2::Inputs ps2;
-	};
-	constexpr ButtonMap BUTTON_MAP[] = {
-		{HidNpadButton_Up, PadDualshock2::Inputs::PAD_UP},
-		{HidNpadButton_Down, PadDualshock2::Inputs::PAD_DOWN},
-		{HidNpadButton_Left, PadDualshock2::Inputs::PAD_LEFT},
-		{HidNpadButton_Right, PadDualshock2::Inputs::PAD_RIGHT},
-		{HidNpadButton_X, PadDualshock2::Inputs::PAD_TRIANGLE},
-		{HidNpadButton_A, PadDualshock2::Inputs::PAD_CIRCLE},
-		{HidNpadButton_B, PadDualshock2::Inputs::PAD_CROSS},
-		{HidNpadButton_Y, PadDualshock2::Inputs::PAD_SQUARE},
-		{HidNpadButton_Minus, PadDualshock2::Inputs::PAD_SELECT},
-		{HidNpadButton_Plus, PadDualshock2::Inputs::PAD_START},
-		{HidNpadButton_L, PadDualshock2::Inputs::PAD_L1},
-		{HidNpadButton_R, PadDualshock2::Inputs::PAD_R1},
-		{HidNpadButton_ZL, PadDualshock2::Inputs::PAD_L2},
-		{HidNpadButton_ZR, PadDualshock2::Inputs::PAD_R2},
-		{HidNpadButton_StickL, PadDualshock2::Inputs::PAD_L3},
-		{HidNpadButton_StickR, PadDualshock2::Inputs::PAD_R3},
-	};
+		return {false, player};
 #endif
-
-#ifndef __SWITCH2__
-	struct NavMap
-	{
-		u64 nx;
-		GenericInputBinding generic;
-	};
-	constexpr NavMap NAV_MAP[] = {
-		{HidNpadButton_Up, GenericInputBinding::DPadUp},
-		{HidNpadButton_Down, GenericInputBinding::DPadDown},
-		{HidNpadButton_Left, GenericInputBinding::DPadLeft},
-		{HidNpadButton_Right, GenericInputBinding::DPadRight},
-		{HidNpadButton_B, GenericInputBinding::Cross},
-		{HidNpadButton_A, GenericInputBinding::Circle},
-		{HidNpadButton_Y, GenericInputBinding::Square},
-		{HidNpadButton_X, GenericInputBinding::Triangle},
-		{HidNpadButton_L, GenericInputBinding::L1},
-		{HidNpadButton_R, GenericInputBinding::R1},
-		{HidNpadButton_ZL, GenericInputBinding::L2},
-		{HidNpadButton_ZR, GenericInputBinding::R2},
-		{HidNpadButton_Minus, GenericInputBinding::Select},
-		{HidNpadButton_Plus, GenericInputBinding::Start},
-	};
-#endif
+	}
 
 	std::array<PadState, NUM_LOCAL_PLAYERS> s_pads;
 	std::thread s_input_thread;
@@ -764,16 +584,11 @@ namespace
 			held = 0;
 			left = right = {};
 		}
-#ifdef __SWITCH2__
 		for (size_t i = 0; i < std::size(PS2_BUTTONS); ++i)
 		{
 			const u64 button = s_pad_buttons[player][i].load(std::memory_order_relaxed);
 			Pad::SetControllerState(player, static_cast<u32>(PS2_BUTTONS[i]), (held & button) ? 1.0f : 0.0f);
 		}
-#else
-		for (const ButtonMap& m : BUTTON_MAP)
-			Pad::SetControllerState(player, static_cast<u32>(m.ps2), (held & m.nx) ? 1.0f : 0.0f);
-#endif
 
 		ApplyStick(player, left, PadDualshock2::Inputs::PAD_L_LEFT, PadDualshock2::Inputs::PAD_L_RIGHT,
 			PadDualshock2::Inputs::PAD_L_UP, PadDualshock2::Inputs::PAD_L_DOWN);
@@ -786,47 +601,16 @@ namespace
 		FeedGamePad(player, held, padGetStickPos(&pad, 0), padGetStickPos(&pad, 1), captured);
 	}
 
-#ifndef __SWITCH2__
-	void FeedNav(u64 held, u64 changed)
-	{
-		for (const NavMap& m : NAV_MAP)
-		{
-			if (changed & m.nx)
-				ImGuiManager::ProcessGenericInputEvent(m.generic, InputLayout::Nintendo, (held & m.nx) ? 1.0f : 0.0f);
-		}
-	}
-
-	void PumpMenuNav()
-	{
-		static u64 s_prev_nav_held = 0;
-
-		const u64 held = s_nav_snapshot.load(std::memory_order_relaxed);
-
-		if (!FullscreenUI::HasActiveWindow())
-		{
-			s_prev_nav_held = held;
-			return;
-		}
-
-		const u64 changed = held ^ s_prev_nav_held;
-		s_prev_nav_held = held;
-		if (changed)
-			FeedNav(held, changed);
-	}
-#endif
-
 	void InputPollLoop()
 	{
 		Threading::SetNameOfCurrentThread("Input Poll");
 		if (!Horizon::PinCallingThreadToCore3())
 			Horizon::ReserveCore3ForCallingThread();
-#ifdef __SWITCH2__
 		bool was_captured = false;
 		std::array<RumbleDevice, NUM_LOCAL_PLAYERS> rumble{};
+#ifdef __SWITCH2__
 		u64 guest_held_before = 0;
 		u32 guest_rumble = 0;
-#else
-		bool prev_menu_combo = false;
 #endif
 		while (!s_input_stop.load(std::memory_order_relaxed))
 		{
@@ -846,6 +630,9 @@ namespace
 			const u64 guest_held = nx2GameShareGetGuestInput(&guest) ? guest.buttons : 0;
 			const u64 guest_down = guest_held & ~guest_held_before;
 			guest_held_before = guest_held;
+#else
+			constexpr u64 guest_held = 0, guest_down = 0;
+#endif
 			const bool captured =
 				SwitchQuickMenu::CaptureInput(held[0] | guest_held, padGetButtonsDown(&s_pads[0]) | guest_down);
 			const VMState state = VMManager::GetState();
@@ -854,10 +641,12 @@ namespace
 				for (u32 player = 0; player < NUM_LOCAL_PLAYERS; player++)
 				{
 					const PlayerSource source = GetPlayerSource(player);
+#ifdef __SWITCH2__
 					if (source.guest)
 						FeedGamePad(player, guest_held, {guest.stick[0], guest.stick[1]}, {guest.stick[2], guest.stick[3]},
 							captured);
 					else
+#endif
 						FeedGamePad(player, s_pads[source.slot], held[source.slot], captured);
 				}
 			}
@@ -869,40 +658,23 @@ namespace
 				const PlayerSource source = GetPlayerSource(player);
 				if (!source.guest)
 					slot_rumble[source.slot] = strength;
+#ifdef __SWITCH2__
 				else if (strength != guest_rumble)
 				{
 					nx2GameShareSetGuestRumble((strength & 0xFFFF) / 65535.0f, (strength >> 16) / 65535.0f);
 					guest_rumble = strength;
 				}
+#endif
 			}
 			for (u32 slot = 0; slot < NUM_LOCAL_PLAYERS; ++slot)
 				PollPadRumble(rumble[slot], s_pads[slot], slot, slot_rumble[slot]);
 			was_captured = captured;
-#else
-			s_nav_snapshot.store(held[0], std::memory_order_relaxed);
-
-			if (!FullscreenUI::HasActiveWindow() && VMManager::HasValidVM())
-			{
-				for (u32 player = 0; player < NUM_LOCAL_PLAYERS; player++)
-					FeedGamePad(player, s_pads[player], held[player]);
-			}
-
-			const bool menu_combo = (held[0] & MENU_COMBO) == MENU_COMBO;
-			if (menu_combo && !prev_menu_combo)
-			{
-				if (FullscreenUI::IsInitialized() && VMManager::HasValidVM())
-					FullscreenUI::OpenPauseMenu();
-				else if (!FullscreenUI::IsInitialized())
-					HorizonHost::RequestExit();
-			}
-			prev_menu_combo = menu_combo;
-#endif
 
 			svcSleepThread(INPUT_POLL_NS);
 		}
-#ifdef __SWITCH2__
 		for (auto& device : rumble)
 			SendRumble(device, 0);
+#ifdef __SWITCH2__
 		if (guest_rumble)
 			nx2GameShareSetGuestRumble(0.0f, 0.0f);
 #endif
@@ -927,7 +699,6 @@ namespace
 	}
 } // namespace
 
-#ifdef __SWITCH2__
 void HorizonHost::LoadPadBindings(const SettingsInterface& settings)
 {
 	for (u32 player = 0; player < NUM_LOCAL_PLAYERS; ++player)
@@ -956,7 +727,6 @@ void HorizonHost::SetPadVibration(unsigned player, float low, float high)
 	const auto strength = [](float value) { return static_cast<u32>(std::lround(std::clamp(value, 0.0f, 1.0f) * 65535.0f)); };
 	s_pad_vibration[player].store(strength(low) | (strength(high) << 16), std::memory_order_relaxed);
 }
-#endif
 
 void Host::CommitBaseSettingChanges()
 {
@@ -979,38 +749,25 @@ int main(int argc, char* argv[])
 
 	mkdir("sdmc:/switch", 0777);
 	mkdir(YADOKARI_ROOT, 0777);
-#ifndef __SWITCH2__
-	mkdir(GAMES_DIR, 0777);
-#endif
 	mkdir(LOGS_DIR, 0777);
-#ifdef __SWITCH2__
 	mkdir("sdmc:/switch/armsx2-nx/inis", 0777);
-#endif
 
 	HorizonException::Initialize(LOGS_DIR);
 	Horizon::ExitTrace("=== main entered");
 	Horizon::AuditHeapToExitTrace("startup");
 
 	Log::SetTimestampsEnabled(true);
-#ifdef __SWITCH2__
-	// The previous run's log stays as emulog.prev.txt: on the Switch 2 a crash leaves no report, only its log.
+	// The previous run's log stays as emulog.prev.txt (on the Switch 2 a crash leaves no report, only its log).
 	{
 		const std::string log_path = Path::Combine(LOGS_DIR, "emulog.txt");
 		const std::string prev_path = Path::Combine(LOGS_DIR, "emulog.prev.txt");
 		std::remove(prev_path.c_str());
 		std::rename(log_path.c_str(), prev_path.c_str());
 	}
-#endif
-#ifdef __SWITCH2__
-	// INFO, as the launcher's EnableVerbose=false asks (SetFileLogPath opens it at DEBUG): every line is flushed.
+	// INFO, as the launcher's EnableVerbose=false asks (SetFileLogPath opens it at DEBUG).
 	Log::SetFileOutputLevel(LOGLEVEL_INFO, Path::Combine(LOGS_DIR, "emulog.txt"));
-#else
-	VMManager::Internal::SetFileLogPath(Path::Combine(LOGS_DIR, "emulog.txt"));
-#endif
-#ifdef __SWITCH2__
 	ReadLaunchHandoff();
 	HorizonHost::SetExitWhenVMEnds(!s_launch_image.empty());
-#endif
 
 	if (HorizonFastmem::IsSupported())
 		INFO_LOG("Horizon fastmem available: {}", HorizonFastmem::GetSupportReason());
@@ -1027,70 +784,49 @@ int main(int argc, char* argv[])
 		EmuFolders::Resources = "romfs:/resources";
 	else if (!EmuFolders::SetResourcesDirectory())
 	{
-#ifdef __SWITCH2__
 		ExitCoreWithError("The emulator's resources could not be read (romfs).");
-#else
-		ERROR_LOG("ROMFS is unavailable and no SD resources directory was found");
-		appletUnlockExit();
-		return 1;
-#endif
 	}
 
 	HorizonException::Breadcrumb("initializing settings");
 	if (!InitializeSettings())
 	{
-#ifdef __SWITCH2__
 		ExitCoreWithError("The emulator's settings could not be loaded (inis/PCSX2.ini).");
-#else
-		ERROR_LOG("Failed to initialize Switch settings");
-		if (romfs_available)
-			romfsExit();
-		appletUnlockExit();
-		return 1;
-#endif
 	}
 
 	HorizonException::Breadcrumb("CPUThreadInitialize");
 	if (!VMManager::Internal::CPUThreadInitialize())
 	{
 		VMManager::Internal::CPUThreadShutdown();
-#ifdef __SWITCH2__
 		ExitCoreWithError("The emulator could not start (CPU thread initialization).");
-#else
-		ERROR_LOG("Failed to initialize the Switch frontend");
-		if (romfs_available)
-			romfsExit();
-		appletUnlockExit();
-		return 1;
-#endif
 	}
 
 	HorizonHost::SetCPUThread();
 	VMManager::ApplySettings();
 	HorizonException::Breadcrumb("settings applied");
 
-#ifndef __SWITCH2__
+#ifdef YADOKARI_USB_STORAGE
+	// (before the boot: the launcher's game may be on a USB drive, which libusbhsfs mounts in the background)
 	if (HorizonUsbStorage::Initialize())
 	{
-		SyncUsbGameRoots();
+		if (s_launch_image.starts_with("ums"))
+		{
+			for (int attempt = 0; attempt < 100 && !FileSystem::FileExists(s_launch_image.c_str()); attempt++)
+				svcSleepThread(100'000'000ULL);
+		}
 		LogUsbVolumes();
 		HorizonUsbStorage::ConsumeChange();
 	}
 	else
-	{
-		SyncUsbGameRoots();
 		WARNING_LOG("{}", HorizonUsbStorage::GetError());
-	}
 #endif
 
 	AppletHookCookie applet_hook{};
 	appletHook(&applet_hook, AppletHookCallback, nullptr);
 	HorizonException::Breadcrumb("USB + applet hook done");
 
-#ifdef __SWITCH2__
 	if (s_launch_image.empty())
 	{
-		ERROR_LOG("No launcher handoff: ARMSX2-nx's games are started from armsx2-nx2.nro");
+		ERROR_LOG("No launcher handoff: ARMSX2-nx's games are started from its launcher");
 		HorizonHost::RequestExit();
 	}
 	else
@@ -1099,20 +835,6 @@ int main(int argc, char* argv[])
 		if (!BootInitialImage(s_launch_image.c_str()))
 			HorizonHost::RequestExit();
 	}
-#else
-	const bool fullscreen_ui = Host::GetBaseBoolSettingValue("UI", "EnableFullscreenUI", true);
-	HorizonException::Breadcrumb(fullscreen_ui ? "initializing FullscreenUI (GS open)" : "FullscreenUI disabled");
-	if (fullscreen_ui && !InitializeFullscreenUI())
-		HorizonHost::RequestExit();
-	else if (!fullscreen_ui && argc < 2)
-	{
-		ERROR_LOG("FullscreenUI is disabled and no launch image was provided");
-		HorizonHost::RequestExit();
-	}
-
-	if (!HorizonHost::IsExitRequested() && argc > 1 && !BootInitialImage(argv[1]) && !FullscreenUI::IsInitialized())
-		HorizonHost::RequestExit();
-#endif
 
 	HorizonException::Breadcrumb("starting input polling");
 	StartInputPolling();
@@ -1123,16 +845,12 @@ int main(int argc, char* argv[])
 	Horizon::ExitTrace("shutdown begin");
 
 	StopInputPolling();
-#ifdef __SWITCH2__
 	// (before the log closes)
 	Host::SetSwitchCpuBoostEnabled(false);
 	ReturnToLauncher();
-#endif
 
 	appletUnhook(&applet_hook);
-#ifndef __SWITCH2__
-	Host::CancelGameListRefresh();
-	Catalog::AutoCovers::Shutdown();
+#ifdef YADOKARI_USB_STORAGE
 	HorizonUsbStorage::Shutdown();
 #endif
 	if (VMManager::GetState() != VMState::Shutdown)
@@ -1150,10 +868,5 @@ int main(int argc, char* argv[])
 		romfsExit();
 	Horizon::ExitTrace("clean exit");
 	HorizonException::Breadcrumb("main returning");
-#ifdef __SWITCH2__
 	ExitCore(0);
-#else
-	appletUnlockExit();
-#endif
-	return 0;
 }

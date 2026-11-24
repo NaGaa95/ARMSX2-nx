@@ -164,7 +164,7 @@ namespace Patch
 	extern const char* PATCH_DISABLE_CONFIG_KEY;
 
 	extern std::vector<PatchInfo> GetPatchInfo(const std::string_view serial, u32 crc, bool cheats, bool showAllCRCS, u32* num_unlabelled_patches);
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	bool IsNamedPatchEnabled(std::string_view name, bool cheats);
 #endif
 

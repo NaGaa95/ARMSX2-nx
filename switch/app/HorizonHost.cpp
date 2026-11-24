@@ -15,8 +15,10 @@
 #include "pcsx2/Horizon/HorizonProfiler.h"
 #include "pcsx2/GS/GS.h"
 #include "pcsx2/Host.h"
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 #include "pcsx2/ImGui/SwitchQuickMenu.h"
+#endif
+#ifdef __SWITCH2__
 #include "switch/lsfg/SwitchLSFG.h"
 #endif
 #include "pcsx2/ImGui/FullscreenUI.h"
@@ -83,7 +85,7 @@ void HorizonHost::RequestExit()
 		const VMState state = VMManager::GetState();
 		if (state == VMState::Running || state == VMState::Paused)
 		{
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 			// Closing from the HOME menu keeps a resume state too, when the setting asks for one.
 			s_save_resume_state.store(EmuConfig.SaveStateOnShutdown, std::memory_order_release);
 #endif
@@ -232,7 +234,7 @@ void Host::SetFullscreen(bool enabled)
 
 void Host::LoadSettings(SettingsInterface& si, std::unique_lock<std::mutex>& lock)
 {
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	HorizonHost::LoadPadBindings(si);
 #endif
 }
@@ -319,7 +321,7 @@ bool Host::InNoGUIMode()
 	return false;
 }
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 static std::atomic_bool s_cpu_boost_enabled{false};
 
 bool Host::IsSwitchCpuBoostEnabled()
@@ -332,7 +334,11 @@ void Host::SetSwitchCpuBoostEnabled(bool enabled)
 	if (IsSwitchCpuBoostEnabled() == enabled)
 		return;
 
+#ifdef __SWITCH2__
 	const Result result = nx2SetCpuBoost(enabled);
+#else
+	const Result result = appletSetCpuBoostMode(enabled ? ApmCpuBoostMode_FastLoad : ApmCpuBoostMode_Normal);
+#endif
 	if (R_SUCCEEDED(result))
 		s_cpu_boost_enabled.store(enabled, std::memory_order_release);
 	else
@@ -342,8 +348,11 @@ void Host::SetSwitchCpuBoostEnabled(bool enabled)
 
 void Host::OnVMStarting()
 {
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
+	// (while the game boots)
 	SetSwitchCpuBoostEnabled(true);
+#endif
+#ifdef __SWITCH2__
 	SwitchLSFG_ResetSession();
 #endif
 	INFO_LOG("Host: VM starting");
@@ -351,9 +360,12 @@ void Host::OnVMStarting()
 
 void Host::OnVMStarted()
 {
-#ifdef __SWITCH2__
+#if defined(__SWITCH2__)
 	if (!GetBaseBoolSettingValue("Switch", "KeepCpuBoost", true))
 		SetSwitchCpuBoostEnabled(false);
+#elif defined(ARMSX2_NX)
+	// The Switch's boost drops the GPU to 76.8 MHz: it lasts only while the game boots.
+	SetSwitchCpuBoostEnabled(false);
 #endif
 	INFO_LOG("Host: VM started");
 }
@@ -363,6 +375,8 @@ void Host::OnVMDestroyed()
 #ifdef __SWITCH2__
 	// (the game has stopped: nothing presents to the guest's screen or writes its audio any more)
 	nx2GameShareEnd();
+#endif
+#ifdef ARMSX2_NX
 	SwitchQuickMenu::OnVMStopped();
 	SetSwitchCpuBoostEnabled(false);
 #endif
@@ -545,7 +559,7 @@ void Host::OnAchievementsLoginSuccess(const char* username, u32 points, u32 sc_p
 
 void Host::OnAchievementsLoginRequested(Achievements::LoginRequestReason reason)
 {
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	WARNING_LOG("RetroAchievements: sign in again from the launcher");
 #else
 	WARNING_LOG("RetroAchievements login is unavailable until Horizon network and keyboard support is implemented");

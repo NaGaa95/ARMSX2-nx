@@ -24,7 +24,7 @@
 #include "GameList.h"
 #include "Host.h"
 #include "INISettingsInterface.h"
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 #include "ImGui/FullscreenUI.h"
 #endif
 #include "ImGui/ImGuiOverlays.h"
@@ -408,7 +408,7 @@ void VMManager::SetState(VMState state)
 		}
 		else
 		{
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 			FullscreenUI::OnVMResumed();
 #endif
 			Host::OnVMResumed();
@@ -908,7 +908,7 @@ static PerGameOverrides GetUserGameOverrides()
 	PerGameOverrides overrides;
 	if (const SettingsInterface* layer = Host::Internal::GetGameSettingsLayer())
 		overrides = ComputePerGameOverrides(*layer);
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	for (const SettingsInterface* layer : {Host::Internal::GetSwitchLaunchSettingsLayer(), Host::Internal::GetSwitchSessionSettingsLayer()})
 	{
 		if (!layer)
@@ -1724,7 +1724,7 @@ void VMManager::ReportGameChangeToHost()
 	const u32 crc_to_report = HasBootedELF() ? s_current_crc : 0;
 	const bool prefer_english = Host::GetBaseBoolSettingValue("UI", "PreferEnglishGameList", false);
 	const std::string game_title = GetTitle(prefer_english);
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	FullscreenUI::GameChanged(disc_path, s_disc_serial, game_title, s_disc_crc, crc_to_report);
 #endif
 	Host::OnGameChanged(game_title, s_elf_override, disc_path, s_disc_serial, s_disc_crc, crc_to_report);
@@ -2165,7 +2165,7 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 		ClearDiscDetails();
 
 		Achievements::GameChanged(0, 0);
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 		FullscreenUI::GameChanged(s_title, std::string(), s_disc_serial, 0, 0);
 #endif
 		UpdateDiscordPresence(true);
@@ -2500,7 +2500,7 @@ VMBootResult VMManager::Initialize(const VMBootParameters& boot_params, Error* e
 	// and touches the audio stream the IOP thread started above writes.
 	IopThread::OnVmPaused(true);
 	Host::OnVMStarted();
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	FullscreenUI::OnVMStarted();
 #endif
 	UpdateInhibitScreensaver(EmuConfig.InhibitScreensaver);
@@ -2586,7 +2586,7 @@ void VMManager::Shutdown(bool save_resume_state)
 	}
 
 	Achievements::GameChanged(0, 0);
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	FullscreenUI::GameChanged(s_title, std::string(), s_disc_serial, 0, 0);
 #endif
 	UpdateDiscordPresence(true);
@@ -2640,7 +2640,7 @@ void VMManager::Shutdown(bool save_resume_state)
 	cdvdUnlock();
 
 	s_state.store(VMState::Shutdown, std::memory_order_release);
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	FullscreenUI::OnVMDestroyed();
 #endif
 	SaveStateSelectorUI::Clear();
@@ -4306,7 +4306,7 @@ void VMManager::CheckForConfigChanges(const Pcsx2Config& old_config)
 	if (EmuConfig.Achievements != old_config.Achievements)
 		Achievements::UpdateSettings(old_config.Achievements);
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	FullscreenUI::CheckForConfigChanges(old_config);
 #endif
 

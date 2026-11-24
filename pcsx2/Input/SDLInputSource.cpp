@@ -884,7 +884,7 @@ std::optional<InputBindingKey> SDLInputSource::ParseKeyString(const std::string_
 											Host::SetBaseStringSettingValue("UI", "SDL2NintendoLayout", "auto");
 											Host::CommitBaseSettingChanges();
 											// Get FSUI to recheck setting
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 											if (FullscreenUI::IsInitialized())
 												FullscreenUI::GamepadLayoutChanged();
 #endif

@@ -8,7 +8,7 @@
 #include "Elfheader.h"
 #include "Host.h"
 #include "GS/Renderers/Common/GSTexture.h"
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 #include "ImGui/FullscreenUI.h"
 #endif
 #include "ImGui/ImGuiFullscreen.h"
@@ -180,7 +180,7 @@ namespace Achievements
 	static std::string GetAchievementBadgePath(const rc_client_achievement_t* achievement, int state);
 	static std::string GetUserBadgePath(const std::string_view username);
 	static std::string GetSubsetBadgePath(const rc_client_subset_t* subset);
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	static std::string GetLeaderboardUserBadgePath(const rc_client_leaderboard_entry_t* entry);
 
 	static void DrawAchievement(const rc_client_achievement_t* cheevo);
@@ -208,7 +208,7 @@ namespace Achievements
 
 	static std::recursive_mutex s_achievements_mutex;
 	static rc_client_t* s_client;
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	static rc_client_async_handle_t* s_switch_leaderboard_request;
 	static LeaderboardCallback s_switch_leaderboard_callback;
 #endif
@@ -232,7 +232,7 @@ namespace Achievements
 	static rc_client_async_handle_t* s_login_request;
 	static rc_client_async_handle_t* s_load_game_request;
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	static rc_client_achievement_list_t* s_achievement_list;
 	static rc_client_subset_list_t* s_subset_list;
 	static rc_client_leaderboard_list_t* s_leaderboard_list;
@@ -272,11 +272,11 @@ void Achievements::BeginLoadingScreen(const char* text)
 	if (Host::HasNativeAchievementNotifications())
 		return;
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	MTGS::RunOnGSThread(&ImGuiManager::InitializeFullscreenUI);
 #endif
 	ImGuiFullscreen::OpenProgressDialog("achievements_loading", text, 0, 0, 0);
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	MTGS::PresentCurrentFrame();
 #endif
 }
@@ -284,7 +284,7 @@ void Achievements::BeginLoadingScreen(const char* text)
 void Achievements::EndLoadingScreen()
 {
 	ImGuiFullscreen::CloseProgressDialog("achievements_loading");
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	MTGS::PresentCurrentFrame();
 #endif
 }
@@ -1446,7 +1446,7 @@ void Achievements::ClientLoadGameCallback(int result, const char* error_message,
 	s_game_icon = {};
 	s_game_icon_url = info->badge_url;
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	// FullscreenUI is only needed when notifications render through ImGui. Platforms with
 	// native notifications skip this so FullscreenUI never initializes and its per-frame
 	// render work stays disabled.
@@ -1469,7 +1469,7 @@ void Achievements::ClientLoadGameCallback(int result, const char* error_message,
 
 void Achievements::ClearGameInfo()
 {
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	CancelLeaderboardEntries();
 #else
 	if (MTGS::IsOpen())
@@ -1521,7 +1521,7 @@ static void PostAchievementNotification(std::string key, float duration, std::st
 
 	MTGS::RunOnGSThread([key = std::move(key), duration, title = std::move(title),
 		message = std::move(message), badge_path = std::move(badge_path)]() {
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 		if (!ImGuiManager::CanRenderGameNotifications())
 		{
 			Host::AddKeyedOSDMessage(key, message.empty() ? title : fmt::format("{}\n{}", title, message), duration);
@@ -1580,7 +1580,7 @@ void Achievements::DisplayHardcoreDeferredMessage()
 
 	MTGS::RunOnGSThread([]() {
 		if (VMManager::HasValidVM() && EmuConfig.Achievements.HardcoreMode && !s_hardcore_mode
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 			&& ImGuiManager::InitializeFullscreenUI()
 #endif
 		)
@@ -1977,7 +1977,7 @@ void Achievements::SetHardcoreMode(bool enabled, bool force_display_message)
 		!Host::HasNativeAchievementNotifications())
 	{
 		MTGS::RunOnGSThread([enabled]() {
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 			if (!ImGuiManager::InitializeFullscreenUI())
 				return;
 #endif
@@ -1996,7 +1996,7 @@ void Achievements::SetHardcoreMode(bool enabled, bool force_display_message)
 		DisplayAchievementSummary();
 	}
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	if (MTGS::IsOpen())
 		MTGS::RunOnGSThread(&Achievements::ClearUIState);
 #endif
@@ -2137,7 +2137,7 @@ std::string Achievements::GetUserBadgePath(const std::string_view username)
 	return path;
 }
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 std::string Achievements::GetLeaderboardUserBadgePath(const rc_client_leaderboard_entry_t* entry)
 {
 	// TODO: maybe we should just cache these in memory...
@@ -2381,7 +2381,7 @@ std::string Achievements::GetHardcoreModeDisableText(const char* reason)
 		reason);
 }
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 void Achievements::ClearUIState()
 {
 	if (FullscreenUI::IsAchievementsWindowOpen() || FullscreenUI::IsLeaderboardsWindowOpen())
@@ -2704,7 +2704,7 @@ void Achievements::DrawGameOverlays()
 	}
 }
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 void Achievements::DrawPauseMenuOverlays()
 {
 	using ImGuiFullscreen::g_large_font;
@@ -4135,7 +4135,7 @@ std::string Achievements::GetSubsetBadgePath(const rc_client_subset_t* subset)
 	return path;
 }
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 void Achievements::OpenSubset(const rc_client_subset_t* subset)
 {
 	Console.WriteLn("Achievements: Opening subset '%s' (%u)", subset->title, subset->id);
@@ -4466,7 +4466,7 @@ bool Achievements::GetCurrentAchievementList(std::vector<AchievementInfo>* achie
 	return true;
 }
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 std::vector<Achievements::LeaderboardInfo> Achievements::GetCurrentLeaderboards()
 {
 	const auto lock = GetLock();

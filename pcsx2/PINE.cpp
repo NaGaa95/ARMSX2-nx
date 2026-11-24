@@ -9,7 +9,7 @@
 #include "GS/GSDumpBundle.h"
 #include "GS/GSPerfMon.h"
 #include "GS/Renderers/Common/GSDevice.h"
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 #include "ImGui/FullscreenUIShot.h"
 #endif
 #include "MTGS.h"
@@ -239,7 +239,7 @@ namespace PINEServer
 		MsgGSDump = 0x14, /**< Records a GS dump of the next N frames. */
 		MsgGetEffectiveSetting = 0x15, /**< Reads what a setting is actually running as. */
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 		// Big Picture from outside, for scripted clients with no display (see ImGui/FullscreenUIShot.h).
 		// All work with no VM running. Each replies [u32 size][JSON, NUL-terminated]:
 		// {"ok":true,...} or {"ok":false,"error":"..."}; a malformed request fails the command.
@@ -259,7 +259,7 @@ namespace PINEServer
 		MsgUnimplemented = 0xFF /**< Unimplemented IPC message. */
 	};
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	static_assert(MsgUIScreenshot == FullscreenUIShot::OpScreenshot && MsgUIOpenPage == FullscreenUIShot::OpOpenPage &&
 					  MsgUIWaitFrames == FullscreenUIShot::OpWaitFrames,
 		"PINE opcodes and FullscreenUIShot.h disagree");
@@ -1322,7 +1322,7 @@ PINEServer::IPCBuffer PINEServer::ParseCommand(std::span<u8> buf, std::vector<u8
 				Host::RunOnCPUThread([]() { VMManager::FrameAdvance(1); });
 				break;
 			}
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 			case MsgUIScreenshot:
 			case MsgUIOpenPage:
 			case MsgUIWaitFrames:

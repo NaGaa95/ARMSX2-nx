@@ -8,7 +8,7 @@
 #include "GS/Renderers/Common/GSHeadlessPresent.h"
 #include "Host.h"
 #include "IconsFontAwesome.h"
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 #include "Achievements.h"
 #include "ImGui/SwitchQuickMenu.h"
 #else
@@ -143,7 +143,7 @@ static constexpr float OSD_FADE_IN_TIME = 0.1f;
 static constexpr float OSD_FADE_OUT_TIME = 0.4f;
 
 // need to keep track of this, so we can reinitialize on renderer switch
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 static bool s_game_notifications_initialized = false;
 #else
 static bool s_fullscreen_ui_was_initialized = false;
@@ -220,7 +220,7 @@ bool ImGuiManager::Initialize()
 	SetKeyMap();
 	SetStyle();
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	ImGuiFullscreen::SetTheme("Dark");
 	ImGuiFullscreen::UpdateLayoutScale();
 	ImGuiFullscreen::UpdateFontScale();
@@ -247,7 +247,7 @@ bool ImGuiManager::Initialize()
 	NewFrame();
 	IMGUI_BREADCRUMB("ImGuiManager::Initialize: NewFrame done");
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	s_game_notifications_initialized = ImGuiFullscreen::Initialize("fullscreenui/placeholder.png");
 #else
 	// reinitialize fsui if it was previously enabled
@@ -265,7 +265,7 @@ bool ImGuiManager::Initialize()
 	return true;
 }
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 bool ImGuiManager::CanRenderGameNotifications()
 {
 	return s_game_notifications_initialized;
@@ -280,7 +280,7 @@ bool ImGuiManager::InitializeFullscreenUI()
 
 bool ImGuiManager::HasActiveMenu()
 {
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	return SwitchQuickMenu::IsOpen();
 #else
 	return FullscreenUI::HasActiveWindow();
@@ -293,7 +293,7 @@ void ImGuiManager::Shutdown(bool clear_state)
 
 	DestroySoftwareCursorTextures();
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	SwitchQuickMenu::OnGSShutdown();
 	ImGuiFullscreen::Shutdown(clear_state);
 	s_game_notifications_initialized = false;
@@ -408,7 +408,7 @@ void ImGuiManager::UpdateScale()
 
 	ImGuiFullscreen::UpdateFontScale();
 
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	if (FullscreenUI::IsInitialized())
 		FullscreenUI::ReloadSvgResources();
 #endif
@@ -1230,7 +1230,7 @@ void ImGuiManager::RenderOSD()
 	const Common::Timer::Value current_time = Common::Timer::GetCurrentValue();
 	AcquirePendingOSDMessages(current_time);
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	if (s_game_notifications_initialized)
 	{
 		ImGuiFullscreen::UploadAsyncTextures();

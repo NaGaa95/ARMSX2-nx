@@ -330,7 +330,7 @@ std::unique_ptr<AudioStream> AudioStream::CreateStream(AudioBackend backend, u32
 			return CreateAudoutAudioStream(sample_rate, parameters, stretch_enabled, error);
 #endif
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 		case AudioBackend::Audren:
 			return CreateAudrenAudioStream(sample_rate, parameters, stretch_enabled, error);
 #endif

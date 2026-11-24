@@ -25,10 +25,10 @@
 #include "common/MemorySettingsInterface.h"
 #include "common/Path.h"
 #include "switch/SwitchSettings.h"
-#include "switch/lsfg/SwitchLSFG.h"
 #include "switch/app/HorizonHost.h"
 #ifdef __SWITCH2__
 #include "nx2_gameshare.h"
+#include "switch/lsfg/SwitchLSFG.h"
 #endif
 
 #include <fmt/format.h>
@@ -915,6 +915,7 @@ namespace
 		};
 	}
 
+#ifdef __SWITCH2__
 	// LSFG 2x for the session: the launcher prepares it, and every game starts with it off.
 	Row FrameGenerationRow()
 	{
@@ -943,6 +944,7 @@ namespace
 			row.detail = "Native rate: the game runs at the display's rate on its own.";
 		return row;
 	}
+#endif
 
 	Rows TabRows(int tab)
 	{
@@ -952,8 +954,10 @@ namespace
 			case TAB_GAME:
 				return GameRows();
 			case TAB_EMULATION:
+#ifdef __SWITCH2__
 				rows.push_back(ToggleRow("CPU Boost", Host::IsSwitchCpuBoostEnabled(), Host::SetSwitchCpuBoostEnabled));
 				rows.push_back(FrameGenerationRow());
+#endif
 				for (int screen : {SCR_CPU, SCR_FRAMERATE, SCR_GAMEFIXES})
 					rows.push_back(ScreenLink(screen));
 				break;

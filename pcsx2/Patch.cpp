@@ -1392,7 +1392,7 @@ bool Patch::IsGloballyToggleablePatch(const PatchInfo& patch_info)
 	return patch_info.name == WS_PATCH_NAME || patch_info.name == NI_PATCH_NAME;
 }
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 bool Patch::IsNamedPatchEnabled(std::string_view name, bool cheats)
 {
 	const auto& enabled = cheats ? s_enabled_cheats : s_enabled_patches;

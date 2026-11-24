@@ -214,16 +214,18 @@ elseif(HORIZON)
 		Horizon/compat/netinet/ip.h
 	)
 	target_include_directories(common PUBLIC Horizon/compat)
+	# The audio renderer backend, on both consoles
+	target_sources(common PRIVATE
+		${CMAKE_SOURCE_DIR}/switch/nx2/switch_audren.c
+		${CMAKE_SOURCE_DIR}/switch/nx2/switch_audren.h)
+	target_include_directories(common PUBLIC ${CMAKE_SOURCE_DIR}/switch/nx2)
 	if(NINTENDO_SWITCH2)
 		# The Switch 2 platform helpers shared with the other NX ports (display, cores, JIT publication, exit).
 		target_sources(common PRIVATE
 			${CMAKE_SOURCE_DIR}/switch/nx2/nx2_platform.c
 			${CMAKE_SOURCE_DIR}/switch/nx2/nx2_platform.h
 			${CMAKE_SOURCE_DIR}/switch/nx2/nx2_gameshare.c
-			${CMAKE_SOURCE_DIR}/switch/nx2/nx2_gameshare.h
-			${CMAKE_SOURCE_DIR}/switch/nx2/switch_audren.c
-			${CMAKE_SOURCE_DIR}/switch/nx2/switch_audren.h)
-		target_include_directories(common PUBLIC ${CMAKE_SOURCE_DIR}/switch/nx2)
+			${CMAKE_SOURCE_DIR}/switch/nx2/nx2_gameshare.h)
 	endif()
 	target_compile_definitions(common PRIVATE _GNU_SOURCE)
 else()

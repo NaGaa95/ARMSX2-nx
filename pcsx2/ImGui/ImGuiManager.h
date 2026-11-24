@@ -33,7 +33,7 @@ namespace ImGuiManager
 	bool Initialize();
 
 	/// Initializes fullscreen UI.
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	bool CanRenderGameNotifications();
 #else
 	bool InitializeFullscreenUI();

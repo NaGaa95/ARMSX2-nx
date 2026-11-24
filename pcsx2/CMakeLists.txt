@@ -1195,7 +1195,8 @@ set(pcsx2ImGuiSources
 	ImGui/OnScreenKeyboardModel.cpp
 )
 
-if(NINTENDO_SWITCH2)
+# ARMSX2-nx (both consoles): the in-game quick menu instead of FullscreenUI
+if(HORIZON)
 	list(APPEND pcsx2ImGuiSources ImGui/SwitchQuickMenu.cpp)
 else()
 	list(APPEND pcsx2ImGuiSources
@@ -1588,11 +1589,8 @@ endif()
 
 if(HORIZON)
 	list(APPEND pcsx2HostSources
-		Host/AudoutAudioStream.cpp)
-	if(NINTENDO_SWITCH2)
-		list(APPEND pcsx2HostSources
-			Host/AudrenAudioStream.cpp)
-	endif()
+		Host/AudoutAudioStream.cpp
+		Host/AudrenAudioStream.cpp)
 	list(APPEND pcsx2Sources
 		Android/AndroidPcapStubs.cpp)
 endif()

@@ -454,7 +454,7 @@ void Host::Internal::SetAutoTuneSettingsLayer(SettingsInterface* sif, std::uniqu
 	s_layered_settings_interface.SetLayer(LayeredSettingsInterface::LAYER_AUTOTUNE, sif);
 }
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 SettingsInterface* Host::Internal::GetSwitchSessionSettingsLayer()
 {
 	return s_layered_settings_interface.GetLayer(LayeredSettingsInterface::LAYER_SWITCH_SESSION);

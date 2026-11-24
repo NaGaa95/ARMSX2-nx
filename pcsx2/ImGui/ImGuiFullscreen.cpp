@@ -979,7 +979,7 @@ void ImGuiFullscreen::ReportGamepadLayout(InputLayout layout)
 		return;
 
 	s_gamepad_layout = layout;
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 	FullscreenUI::GamepadLayoutChanged();
 #endif
 }

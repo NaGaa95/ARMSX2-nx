@@ -23,7 +23,7 @@ namespace HorizonHost
 
 	// Started by the launcher for one game: the program ends (and the launcher runs again) when that game's VM ends.
 	void SetExitWhenVMEnds(bool enabled);
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	void LoadPadBindings(const SettingsInterface& settings);
 	void SetPadVibration(unsigned player, float low, float high);
 #endif

@@ -81,7 +81,7 @@ namespace Host
 	/// Requests settings reset. Can be called from any thread, will call back and apply on the CPU thread.
 	bool RequestResetSettings(bool folders, bool core, bool controllers, bool hotkeys, bool ui);
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	// The current session's FastLoad state. Set on the VM thread.
 	bool IsSwitchCpuBoostEnabled();
 	void SetSwitchCpuBoostEnabled(bool enabled);
@@ -204,7 +204,7 @@ namespace Host
 		/// Sets the auto-tune trial layer, which sits above the game layer. Called by AutoTune; null removes it.
 		void SetAutoTuneSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>& settings_lock);
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 		SettingsInterface* GetSwitchSessionSettingsLayer();
 		SettingsInterface* GetSwitchLaunchSettingsLayer();
 		void SetSwitchSessionSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>& settings_lock);

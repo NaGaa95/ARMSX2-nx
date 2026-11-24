@@ -281,7 +281,9 @@ elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_SYSTEM_PROCESSOR
 			OVERRIDE_HOST_PAGE_SIZE=0x1000
 			OVERRIDE_HOST_CACHE_LINE_SIZE=64
 			__SWITCH__=1
-			__LINUX_ERRNO_EXTENSIONS__=1)
+			__LINUX_ERRNO_EXTENSIONS__=1
+			# The ARMSX2-nx frontend (the launcher's handoff, the quick menu, the settings layers) on both consoles
+			ARMSX2_NX=1)
 		if(NINTENDO_SWITCH2)
 			list(APPEND PCSX2_DEFS __SWITCH2__=1)
 		endif()

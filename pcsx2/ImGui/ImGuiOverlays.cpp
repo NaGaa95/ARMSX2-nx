@@ -16,7 +16,7 @@
 #include "Host.h"
 #include "IconsFontAwesome.h"
 #include "IconsPromptFont.h"
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 #include "ImGui/FullscreenUI.h"
 #endif
 #include "ImGui/ImGuiAnimated.h"
@@ -2058,7 +2058,7 @@ void SaveStateSelectorUI::LoadCurrentSlot()
 	Host::RunOnCPUThread([slot = GetCurrentSlot()]() {
 		Error error;
 		if (!VMManager::LoadStateFromSlot(slot, false, &error))
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 			SaveState_ReportLoadErrorOSD(error.GetDescription(), slot, false);
 #else
 			FullscreenUI::ReportStateLoadError(error.GetDescription(), slot, false);
@@ -2072,7 +2072,7 @@ void SaveStateSelectorUI::LoadCurrentBackupSlot()
 	Host::RunOnCPUThread([slot = GetCurrentSlot()]() {
 		Error error;
 		if (!VMManager::LoadStateFromSlot(slot, true, &error))
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 			SaveState_ReportLoadErrorOSD(error.GetDescription(), slot, true);
 #else
 			FullscreenUI::ReportStateLoadError(error.GetDescription(), slot, true);
@@ -2085,7 +2085,7 @@ void SaveStateSelectorUI::SaveCurrentSlot()
 {
 	Host::RunOnCPUThread([slot = GetCurrentSlot()]() {
 		VMManager::SaveStateToSlot(slot, true, [slot](const std::string& error) {
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 			SaveState_ReportSaveErrorOSD(error, slot);
 #else
 			FullscreenUI::ReportStateSaveError(error, slot);

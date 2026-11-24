@@ -14,14 +14,14 @@ public:
 	enum Layer : u32
 	{
 		LAYER_CMDLINE,
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 		LAYER_SWITCH_SESSION,
 #endif
 		// Values auto-tune is trying out, in memory only. Above the game layer so a trial beats the
 		// game's own file, below the command line so an explicit override still wins. Not stored in
 		// LAYER_CMDLINE: that slot holds what the player typed, which a trial must never outrank.
 		LAYER_AUTOTUNE,
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 		LAYER_SWITCH_LAUNCH,
 #endif
 		LAYER_GAME,

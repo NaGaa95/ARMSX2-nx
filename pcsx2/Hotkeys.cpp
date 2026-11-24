@@ -8,7 +8,7 @@
 #include "IconsFontAwesome.h"
 #include "ImGui/FullscreenUI.h"
 #include "ImGui/ImGuiOverlays.h"
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 #include "ImGui/SwitchQuickMenu.h"
 #endif
 #include "Input/InputManager.h"
@@ -118,7 +118,7 @@ static void HotkeyLoadStateSlot(s32 slot)
 
 		Error error;
 		if (!VMManager::LoadStateFromSlot(slot, false, &error))
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 			SaveState_ReportLoadErrorOSD(error.GetDescription(), slot, false);
 #else
 			FullscreenUI::ReportStateLoadError(error.GetDescription(), slot, false);
@@ -129,7 +129,7 @@ static void HotkeyLoadStateSlot(s32 slot)
 static void HotkeySaveStateSlot(s32 slot)
 {
 	VMManager::SaveStateToSlot(slot, true, [slot](const std::string& error) {
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 		SaveState_ReportSaveErrorOSD(error, slot);
 #else
 		FullscreenUI::ReportStateSaveError(error, slot);
@@ -176,7 +176,7 @@ DEFINE_HOTKEY("ToggleFullscreen", TRANSLATE_NOOP("Hotkeys", "Navigation"), TRANS
 DEFINE_HOTKEY("OpenPauseMenu", TRANSLATE_NOOP("Hotkeys", "Navigation"), TRANSLATE_NOOP("Hotkeys", "Open Pause Menu"),
 	[](s32 pressed) {
 		if (!pressed && VMManager::HasValidVM() && CanPause())
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 			SwitchQuickMenu::Toggle();
 #else
 			FullscreenUI::OpenPauseMenu();
@@ -187,7 +187,7 @@ DEFINE_HOTKEY("QuitApplication", TRANSLATE_NOOP("Hotkeys", "Navigation"), TRANSL
 		if (!pressed)
 			Host::RequestExitApplication(true);
 	})
-#ifndef __SWITCH2__
+#ifndef ARMSX2_NX
 DEFINE_HOTKEY("OpenAchievementsList", TRANSLATE_NOOP("Hotkeys", "Navigation"),
 	TRANSLATE_NOOP("Hotkeys", "Open Achievements List"), [](s32 pressed) {
 		if (!pressed && CanPause())
