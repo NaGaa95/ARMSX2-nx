@@ -1,0 +1,184 @@
+# ARMSX2-nx launcher for the Switch: armsx2-nx.nro, the same SDL 2 game library as the Switch 2's (Makefile), built
+# with libnx. Its EGL is devkitPro's stock switch-mesa 20.1.0, which the portlibs' SDL 2 expects, like the user's other
+# Switch launchers; the cores get the Switch Mesa SDK. USB drives come from libusbhsfs, built by the Deko3D core.
+#
+#   make -f Makefile.switch LAUNCHER_MESA20_ROOT=<switch-mesa 20.1.0's portlibs/switch>
+#        [CORE_DEKO3D=<armsx2_deko3d.nro>] [CORE_VULKAN=<armsx2_vulkan.nro>] [CORE_OPENGL=<armsx2_opengl.nro>]
+#        [LIBUSBHSFS_INCLUDE=<libusbhsfs/include>] [LIBUSBHSFS_LIB=<liblibusbhsfs.a>]
+#
+# The cores (switch/build-switch.sh deko3d, vulkan and opengl) travel in the NRO's romfs (emu/), with their SHA-256
+# for the launcher's copy on the SD card: switch/build-switch-all.sh builds the three, then this.
+.SUFFIXES:
+.DEFAULT_GOAL := all
+
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/devkitpro")
+endif
+
+APP_TITLE	:=	ARMSX2-nx
+APP_AUTHOR	:=	PalindromicBreadLoaf & naga
+RELEASE_VERSION	?=	1.0.0
+APP_VERSION	?=	$(RELEASE_VERSION)
+
+TOPDIR ?= $(CURDIR)
+include $(DEVKITPRO)/libnx/switch_rules
+
+TARGET		:=	armsx2-nx
+BUILD		:=	build_switch
+SOURCES		:=	source
+DATA		:=	data
+INCLUDES	:=	source ../nx2
+# romfs/ and the cores, staged
+ROMFS		:=	$(BUILD)/romfs
+ICON		:=	icon.jpg
+CORE_DEKO3D	?=	$(TOPDIR)/../../build-switch-deko3d/switch/app/armsx2_deko3d.nro
+CORE_VULKAN	?=	$(TOPDIR)/../../build-switch-vulkan/switch/app/armsx2_vulkan.nro
+CORE_OPENGL	?=	$(TOPDIR)/../../build-switch-opengl/switch/app/armsx2_opengl.nro
+LIBUSBHSFS_INCLUDE	?=	$(TOPDIR)/../../build-switch-deko3d/_deps/libusbhsfs-src/include
+LIBUSBHSFS_LIB	?=	$(TOPDIR)/../../build-switch-deko3d/_deps/libusbhsfs-build/liblibusbhsfs.a
+LAUNCHER_MESA20_ROOT	?=
+
+ifeq ($(strip $(LAUNCHER_MESA20_ROOT)),)
+$(error "Set LAUNCHER_MESA20_ROOT to devkitPro's switch-mesa 20.1.0 (switch/build-switch-all.sh stages it)")
+endif
+
+ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+LTOFLAGS	:=	-flto=auto -fuse-linker-plugin
+
+# SDL 2 and curl come from the Switch portlibs, built against switch-mesa 20.1.0's EGL.
+SDL_CFLAGS	:=	-I$(PORTLIBS)/include/SDL2 -D_REENTRANT -DCURL_STATICLIB
+
+# (libnx's switch_rules does not define __SWITCH__ as libounce's does)
+CFLAGS	:=	$(SDL_CFLAGS) -Wall -Wextra -O3 -DNDEBUG $(LTOFLAGS) -ffunction-sections -fdata-sections -fno-ident \
+			-ffile-prefix-map=$(CURDIR)=. -fmacro-prefix-map=$(CURDIR)=. -D__SWITCH__ \
+			-DARMSX2NX_VERSION='"$(APP_VERSION)"' \
+			-DARMSX2NX_RELEASE_VERSION='"$(RELEASE_VERSION)"' $(ARCH) $(DEFINES)
+CFLAGS	+=	$(INCLUDE) -I$(LIBUSBHSFS_INCLUDE) -D_GNU_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64
+
+CXXFLAGS	:= $(CFLAGS) -fno-rtti -std=gnu++20
+
+ASFLAGS	:=	$(ARCH)
+LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs $(ARCH) $(LTOFLAGS) -Wl,-Map,$(notdir $*.map) \
+			-Wl,--gc-sections -Wl,--build-id=none
+
+# (switch-mesa 20.1.0 first in LIBDIRS: the portlibs hold another Mesa)
+LIBS	:=	-lSDL2_ttf -lharfbuzz -lfreetype -lbz2 -lSDL2_image -lpng16 -ljpeg -lwebp -lSDL2 \
+			-lEGL -lGLESv2 -lglapi -ldrm_nouveau -lcurl -lzstd -lexpat -lz \
+			$(LIBUSBHSFS_LIB) -lntfs-3g -lstdc++ -lm -lpthread -lnx
+
+LIBDIRS	:= $(LAUNCHER_MESA20_ROOT) $(PORTLIBS) $(LIBNX)
+
+ifneq ($(BUILD),$(notdir $(CURDIR)))
+
+export OUTPUT	:=	$(CURDIR)/$(TARGET)
+export TOPDIR	:=	$(CURDIR)
+
+export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
+			$(foreach dir,$(DATA),$(CURDIR)/$(dir))
+
+export DEPSDIR	:=	$(CURDIR)/$(BUILD)
+
+CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
+
+# Link with the C++ driver.
+export LD	:=	$(CXX)
+
+export OFILES_BIN	:=	$(addsuffix .o,$(BINFILES))
+export OFILES_SRC	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
+export OFILES 	:=	$(OFILES_BIN) $(OFILES_SRC)
+export HFILES_BIN	:=	$(addsuffix .h,$(subst .,_,$(BINFILES)))
+
+export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
+			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
+			-I$(CURDIR)/$(BUILD)
+
+export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+
+export APP_ICON := $(TOPDIR)/$(ICON)
+export NROFLAGS += --icon=$(APP_ICON) --nacp=$(CURDIR)/$(TARGET).nacp --romfsdir=$(CURDIR)/$(ROMFS)
+
+ifneq ($(APP_TITLEID),)
+	export NACPFLAGS += --titleid=$(APP_TITLEID)
+endif
+
+# The romfs: romfs/ (logo, icons) and the cores, each with emu/<core>.sha256.
+CORES		:=	$(wildcard $(CORE_DEKO3D) $(CORE_VULKAN) $(CORE_OPENGL))
+ifeq ($(strip $(CORES)),)
+$(error "No ARMSX2 core to embed: build one first (switch/build-switch.sh deko3d, vulkan or opengl)")
+endif
+ifeq ($(wildcard $(CORE_DEKO3D)),)
+$(warning "No Deko3D core ($(CORE_DEKO3D)): this launcher will not start games with the Deko3D renderer")
+endif
+ifeq ($(wildcard $(CORE_VULKAN)),)
+$(warning "No Vulkan core ($(CORE_VULKAN)): this launcher will not start games with the Vulkan renderer")
+endif
+ifeq ($(wildcard $(CORE_OPENGL)),)
+$(warning "No OpenGL core ($(CORE_OPENGL)): this launcher will not start games with the OpenGL and Zink renderers")
+endif
+ifeq ($(wildcard $(LIBUSBHSFS_LIB)),)
+$(error "No libusbhsfs ($(LIBUSBHSFS_LIB)): build the Deko3D core first (switch/build-switch.sh deko3d)")
+endif
+STATIC_ROMFS	:=	$(patsubst romfs/%,$(ROMFS)/%,$(shell find romfs -type f))
+STAGED_CORES	:=	$(foreach core,$(CORES),$(ROMFS)/emu/$(notdir $(core)))
+STAGED_ROMFS	:=	$(STATIC_ROMFS) $(STAGED_CORES) $(STAGED_CORES:.nro=.sha256)
+
+.PHONY: $(BUILD) clean all
+
+all: $(BUILD)
+
+$(BUILD): $(STAGED_ROMFS)
+	@rm -f $(filter-out $(STAGED_ROMFS),$(shell find $(ROMFS) -type f))
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile.switch
+
+$(ROMFS)/%: romfs/%
+	@mkdir -p $(@D)
+	@cp -f $< $@
+
+$(ROMFS)/emu/armsx2_deko3d.nro: $(CORE_DEKO3D)
+	@mkdir -p $(@D)
+	@echo staging $(notdir $<)
+	@cp -f $< $@
+
+$(ROMFS)/emu/armsx2_vulkan.nro: $(CORE_VULKAN)
+	@mkdir -p $(@D)
+	@echo staging $(notdir $<)
+	@cp -f $< $@
+
+$(ROMFS)/emu/armsx2_opengl.nro: $(CORE_OPENGL)
+	@mkdir -p $(@D)
+	@echo staging $(notdir $<)
+	@cp -f $< $@
+
+$(ROMFS)/emu/%.sha256: $(ROMFS)/emu/%.nro
+	@sha256sum $< | cut -d' ' -f1 > $@
+
+clean:
+	@echo clean ...
+	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+
+else
+.PHONY:	all
+
+DEPENDS	:=	$(OFILES:.o=.d)
+
+all	:	$(OUTPUT).nro
+
+$(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
+
+ROMFS_FILES := $(shell find $(TOPDIR)/$(ROMFS) -type f)
+$(OUTPUT).nro : $(APP_ICON) $(ROMFS_FILES) $(TOPDIR)/Makefile.switch
+
+$(OUTPUT).elf	:	$(OFILES) $(LIBUSBHSFS_LIB)
+
+$(OFILES_SRC)	: $(HFILES_BIN) $(TOPDIR)/Makefile.switch
+
+%.bin.o	%_bin.h :	%.bin
+	@echo $(notdir $<)
+	@$(bin2o)
+
+-include $(DEPENDS)
+
+endif

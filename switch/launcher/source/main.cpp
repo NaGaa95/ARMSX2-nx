@@ -41,7 +41,11 @@
 #include "launcher_update.h"
 #include "localization.h"
 
+#ifdef __SWITCH2__
 #include "nx2_platform.h"
+#else
+#include <usbhsfs.h>
+#endif
 
 // SDL uses Xbox button names.
 #define BTN_CONFIRM  SDL_CONTROLLER_BUTTON_B
@@ -70,9 +74,65 @@ static const char *MEMCARDS_DIR= "sdmc:/switch/armsx2-nx/memcards";
 // Frame generation's shaders come from the user's own Lossless.dll (Lossless Scaling), copied here.
 static const char *LSFG_DIR    = "sdmc:/switch/armsx2-nx/lsfg";
 static const char *LSFG_DLL    = "sdmc:/switch/armsx2-nx/lsfg/Lossless.dll";
+#ifdef __SWITCH2__
 static const char *EMU_HOST_DIR= "sdmc:/switch/armsx2-nx/.emu";
 static const char *LAUNCHER_NRO= "sdmc:/switch/armsx2-nx2.nro";
+#else
+// (one SD card serves both consoles: the Switch's cores have a folder of their own)
+static const char *EMU_HOST_DIR= "sdmc:/switch/armsx2-nx/.emu-switch";
+static const char *LAUNCHER_NRO= "sdmc:/switch/armsx2-nx.nro";
+#endif
 static std::string g_launcherNroPath = LAUNCHER_NRO;
+
+// CPU boost for the launcher's own heavy work (file transfers, busy tasks, extracting a core).
+static void setLauncherCpuBoost(bool enabled) {
+#ifdef __SWITCH2__
+  nx2SetCpuBoost(enabled);
+#else
+  appletSetCpuBoostMode(enabled?ApmCpuBoostMode_FastLoad:ApmCpuBoostMode_Normal);
+#endif
+}
+
+#ifndef __SWITCH2__
+// USB drives (libusbhsfs, the Switch only: kaiHEN's usb:hs never answers on the Switch 2), mounted as ums0:/, ums1:/...
+// in the background once initialized. The cores mount them again (read-only) for the game the launcher hands over.
+static bool g_usbReady = false;
+
+static void initializeUsbStorage() {
+  usbHsFsSetFileSystemMountFlags(UsbHsFsMountFlags_ReplayJournal|UsbHsFsMountFlags_ShowHiddenFiles);
+  const Result result=usbHsFsInitialize(0);
+  g_usbReady=R_SUCCEEDED(result);
+}
+
+static void shutdownUsbStorage() {
+  if(g_usbReady) usbHsFsExit();
+  g_usbReady=false;
+}
+
+struct UsbDrive { std::string root,label,detail; };
+static std::vector<UsbDrive> usbDrives() {
+  std::vector<UsbDrive> drives;
+  if(!g_usbReady) return drives;
+  const u32 count=usbHsFsGetMountedDeviceCount();
+  if(!count) return drives;
+  std::vector<UsbHsFsDevice> devices(count);
+  const u32 listed=usbHsFsListMountedDevices(devices.data(),count);
+  for(u32 i=0;i<listed;i++){
+    const UsbHsFsDevice &device=devices[i];
+    std::string product=device.product_name;
+    if(product.empty()) product=device.manufacturer;
+    const char *fs=device.fs_type==UsbHsFsDeviceFileSystemType_FAT12?"FAT12":
+                   device.fs_type==UsbHsFsDeviceFileSystemType_FAT16?"FAT16":
+                   device.fs_type==UsbHsFsDeviceFileSystemType_FAT32?"FAT32":
+                   device.fs_type==UsbHsFsDeviceFileSystemType_exFAT?"exFAT":
+                   device.fs_type==UsbHsFsDeviceFileSystemType_NTFS?"NTFS":"USB";
+    drives.push_back({std::string(device.name)+"/",
+                      "USB drive"+(product.empty()?std::string():" - "+product),
+                      std::string(fs)+(device.write_protect?", read-only":"")});
+  }
+  return drives;
+}
+#endif
 
 // The launcher's log. Every line is flushed: on the Switch 2 a crash leaves no report behind.
 static FILE *g_logFile = nullptr;
@@ -503,7 +563,11 @@ static const SettingHelpEntry SETTING_HELP[] = {
   {FRAMEGEN_120HZ_KEY, "Frame generation",
    "Docked, switches the output to 120 Hz (1440p or 1080p, the TV's 120 Hz mode) so that frame generation doubles 50/60 FPS games to 120. It is used only while the game runs at 50/60 FPS. Off, the output stays at the TV's resolution (up to 4K at 60 Hz) and frame generation doubles 30 FPS games only. Handheld always runs at 120 Hz."},
   {"EmuCore/GS/Renderer", "Graphics backend",
+#ifdef __SWITCH2__
    "Chooses the core the game runs in. Drako3D renders PS2 GS draws natively on the Switch 2 GPU; Vulkan runs PCSX2's Vulkan renderer on mesa-nx's NVK driver; OpenGL runs PCSX2's OpenGL renderer on mesa-nx's NVC0 driver, or on Zink over NVK. Each renderer's core is its own program, started by the launcher. Frame generation works with Vulkan and Drako3D."},
+#else
+   "Chooses the core the game runs in. Deko3D renders PS2 GS draws natively on the Switch GPU; Vulkan runs PCSX2's Vulkan renderer on mesa-nx's NVK driver; OpenGL runs PCSX2's OpenGL renderer on mesa-nx's NVC0 driver, or on Zink over NVK. Each renderer's core is its own program, started by the launcher."},
+#endif
   {"EmuCore/GS/upscale_multiplier", "Resolution / performance",
    "Sets the internal resolution used for 3D rendering. Higher scales improve clarity but increase GPU load. Pre-rendered FMV resolution does not change."},
   {"EmuCore/GS/AspectRatio", "Display geometry",
@@ -517,9 +581,17 @@ static const SettingHelpEntry SETTING_HELP[] = {
   {"EmuCore/GS/GSBackThreadMode", "GS multithreading",
    "Runs GS rendering on a second thread. It helps heavy rendering such as high upscaling; if a game shows graphics glitches, turn it back off."},
   {"EmuCore/GS/GSBackThreadUseCore3", "GS multithreading",
+#ifdef __SWITCH2__
    "Moves the GS front thread to the console's spare CPU core (the last of the Switch 2's six) and gives the GS back thread the core it leaves, so each GS thread runs on a core of its own."},
+#else
+   "Moves the GS front thread to the console's spare CPU core (core 3) and gives the GS back thread the core it leaves, so each GS thread runs on a core of its own."},
+#endif
   {"EmuCore/GS/GSBackThreadQueueVsync", "GS multithreading",
+#ifdef __SWITCH2__
    "Lets the GS back thread present each frame itself (Drako3D). Turn it off if presentation stutters with GS multithreading on."},
+#else
+   "Lets the GS back thread present each frame itself (Deko3D). Turn it off if presentation stutters with GS multithreading on."},
+#endif
   {"EmuCore/GS/filter", "Texture filtering",
    "Selects where bilinear filtering is used on PS2 textures. PS2 follows each game's request; Forced smooths more surfaces, while Nearest keeps hard pixel edges. Forced filtering can blur 2D sprites."},
   {"EmuCore/GS/MaxAnisotropy", "Texture filtering",
@@ -2305,6 +2377,16 @@ static void scanGames(const std::vector<std::string> &sourcePaths)
     size_t queued=0;
     for(const auto &[source,storageId]:sources){
       if(state->cancel.load(std::memory_order_acquire)) break;
+#ifndef __SWITCH2__
+      // A USB drive mounts in the background after the launcher starts: its folders get a few seconds to appear.
+      if(source.rfind("ums",0)==0){
+        for(int attempt=0;attempt<50&&!state->cancel.load(std::memory_order_acquire);attempt++){
+          struct stat sourceInfo{};
+          if(stat(source.c_str(),&sourceInfo)==0) break;
+          svcSleepThread(100'000'000ULL);
+        }
+      }
+#endif
       DIR *directory=opendir(source.c_str());
       if(!directory) continue;
       while(!state->cancel.load(std::memory_order_acquire)){
@@ -3020,7 +3102,7 @@ static bool executePaste(const std::string &folder) {
   setTransferDetail(state,"Preparing transfer...");
   bool ok=false;
   std::atomic<bool> complete{false};
-  nx2SetCpuBoost(true);
+  setLauncherCpuBoost(true);
   std::thread worker([&](){
     ok=measureTree(g_fileClipboard.path,state);
     if(ok&&!state.cancelled.load()&&!enoughFreeSpace(folder,state.total.load(std::memory_order_relaxed))){
@@ -3038,7 +3120,7 @@ static bool executePaste(const std::string &folder) {
     waitForNextFrame();
   }
   worker.join();
-  nx2SetCpuBoost(false);
+  setLauncherCpuBoost(false);
   if(!ok&&S_ISDIR(sourceStat.st_mode)) removeTreeInternal(destination);
   if(ok&&g_fileClipboard.move){
     if(removeTreeInternal(g_fileClipboard.path)) replaceSavedPathPrefix(g_fileClipboard.path,destination);
@@ -3069,7 +3151,7 @@ static void drawBusyTaskFrame(const std::string &title,const std::string &detail
 static void runBusyTask(const std::string &title,const std::string &detail,
                         const std::function<void()> &task,std::atomic_bool *cancel=nullptr) {
   std::atomic_bool complete{false};
-  nx2SetCpuBoost(true);
+  setLauncherCpuBoost(true);
   std::thread worker([&]{ task(); complete.store(true,std::memory_order_release); wakeUi(0x42555359); });
   while(!complete.load(std::memory_order_acquire)){
     if(!beginUiFrame()){ if(cancel) cancel->store(true,std::memory_order_release); waitForNextFrame(); continue; }
@@ -3084,7 +3166,7 @@ static void runBusyTask(const std::string &title,const std::string &detail,
     waitForNextFrame();
   }
   worker.join();
-  nx2SetCpuBoost(false);
+  setLauncherCpuBoost(false);
 }
 
 enum class BrowserMode { SelectFolder, SelectFile, SelectCard, Manage };
@@ -3105,6 +3187,10 @@ static std::vector<BrowserItem> browserItems(const std::string &current,BrowserM
   std::vector<BrowserItem> items; opened=true;
   if(current.empty()){
     items.push_back({"SD card","sdmc:/",BrowserItemKind::Location,true,"Internal SD storage"});
+#ifndef __SWITCH2__
+    for(const auto &drive:usbDrives())
+      items.push_back({drive.label,drive.root,BrowserItemKind::Location,true,drive.detail});
+#endif
     for(const auto &favorite:loadFavoriteFolders())
       items.push_back({"Pinned - "+favorite,favorite,BrowserItemKind::Location,true,"Pinned folder"});
     return items;
@@ -4463,7 +4549,11 @@ static void runSettingsRoot(const char *ctx) {
   const bool global=!(ctx&&*ctx);
   static const int globalOrder[] = { SCR_EMU, SCR_GRAPHICS, SCR_AUDIO, SCR_CONTROLLER, SCR_SYSTEM };
   // (globally, Frame Generation is in the General group)
+#ifdef __SWITCH2__
   static const int gameOrder[] = { SCR_FRAMEGEN, SCR_EMU, SCR_GRAPHICS, SCR_AUDIO, SCR_CONTROLLER, SCR_SYSTEM };
+#else
+  static const int gameOrder[] = { SCR_EMU, SCR_GRAPHICS, SCR_AUDIO, SCR_CONTROLLER, SCR_SYSTEM };
+#endif
   const int *order=global?globalOrder:gameOrder;
   const int nscr=global?(int)std::size(globalOrder):(int)std::size(gameOrder);
   const int launcherRow=0,libraryRow=1,retroAchievementsRow=2,frameGenerationRow=3;
@@ -5692,6 +5782,11 @@ static bool prepareLaunch(const std::string &key,const std::string &pathKey,cons
   expandClampingModes(effective);
   expandClampingModes(overrides);
   storeSet(effective,"Pad1/Type","DualShock2");
+#ifndef __SWITCH2__
+  // (no frame generation on the Switch)
+  storeSet(effective,FRAMEGEN_KEY,"false");
+  storeSet(overrides,FRAMEGEN_KEY,"false");
+#endif
   const auto frameGenerationOn=[&]{
     return !strcmp(storeGet(overrides,FRAMEGEN_KEY,storeGet(effective,FRAMEGEN_KEY,"false")),"true");
   };
@@ -5711,7 +5806,7 @@ static bool prepareLaunch(const std::string &key,const std::string &pathKey,cons
     const char *api=storeGet(*store,"DEV9/Eth/EthApi",nullptr);
     if(api&&strcmp(api,"Sockets")!=0&&strcmp(api,"Local Link")!=0) storeSet(*store,"DEV9/Eth/EthApi","Sockets");
   }
-  // The renderer picks the core: Vulkan (14), OpenGL on nvc0 (12) or Zink (20), Drako3D (18) for anything else.
+  // The renderer picks the core: Vulkan (14), OpenGL on nvc0 (12) or Zink (20), Drako3D/Deko3D (18) for anything else.
   std::string renderer=storeGet(overrides,RENDERER_KEY,storeGet(effective,RENDERER_KEY,"18"));
   if(renderer!="14"&&renderer!="12"&&renderer!="20") renderer="18";
   storeSet(overrides,RENDERER_KEY,renderer.c_str());
@@ -5724,20 +5819,25 @@ static bool prepareLaunch(const std::string &key,const std::string &pathKey,cons
     lsfgMissing=false;
   }
 
-  const char *core=vulkan?"armsx2_vulkan":opengl?"armsx2_opengl":"armsx2_drako3d";
+#ifdef __SWITCH2__
+  const char *nativeCore="armsx2_drako3d",*nativeRenderer="Drako3D";
+#else
+  const char *nativeCore="armsx2_deko3d",*nativeRenderer="Deko3D";
+#endif
+  const char *core=vulkan?"armsx2_vulkan":opengl?"armsx2_opengl":nativeCore;
   emulatorNro=std::string(EMU_HOST_DIR)+"/"+core+".nro";
-  launcherLog("renderer %s, core %s",renderer=="14"?"Vulkan":renderer=="12"?"OpenGL (nvc0)":renderer=="20"?"OpenGL (Zink)":"Drako3D",
+  launcherLog("renderer %s, core %s",renderer=="14"?"Vulkan":renderer=="12"?"OpenGL (nvc0)":renderer=="20"?"OpenGL (Zink)":nativeRenderer,
               emulatorNro.c_str());
   const std::string source=std::string("romfs:/emu/")+core+".nro";
-  nx2SetCpuBoost(true);
+  setLauncherCpuBoost(true);
   g_setupTotal=setupFileBytes(source.c_str());
   g_setupDone=0; g_setupPct=-1; g_setupAborted=false;
-  g_setupDetail=uiText(vulkan?"Vulkan core":opengl?"OpenGL core":"Drako3D core");
+  g_setupDetail=uiText(vulkan?"Vulkan core":opengl?"OpenGL core":(std::string(nativeRenderer)+" core").c_str());
   const bool haveEmulator=ensureEmu(core);
   g_setupDone=std::max(g_setupDone,g_setupTotal);
   if(g_setupPct>=0) setupTick(0);   // land on 100% before the screen goes away
   g_setupTotal=0;
-  nx2SetCpuBoost(false);
+  setLauncherCpuBoost(false);
 
   const bool configSaved=haveEmulator&&writeEmulatorSettings(effective);
   const bool handoffSaved=configSaved&&writeLaunchHandoff(gamePath,overrides);
@@ -6157,6 +6257,9 @@ static void cleanupLauncher() {
   g_storageSocketReady=false;
   if(g_romfsReady) romfsExit();
   g_romfsReady=false;
+#ifndef __SWITCH2__
+  shutdownUsbStorage();
+#endif
 }
 
 static int startupFailure(const char *message) {
@@ -6168,8 +6271,10 @@ static int startupFailure(const char *message) {
 }
 
 int main(int argc, char **argv){
+#ifdef __SWITCH2__
   // 1920x1080 at 120 Hz handheld, the TV's resolution docked (switch/nx2/nx2_platform.h).
   nx2DisplayInit();
+#endif
   openLauncherLog();
   launcherLog("ARMSX2-nx launcher %s",ARMSX2NX_VERSION);
   if(argc>=1&&argv[0]&&argv[0][0]){
@@ -6181,9 +6286,15 @@ int main(int argc, char **argv){
   const bool updateRecoveryOk=LauncherUpdate_RecoverInstallation(g_launcherNroPath,updateRecoveryError);
   if(R_FAILED(romfsInit())){ launcherLog("romfsInit failed"); closeLauncherLog(); return 1; }
   g_romfsReady=true;
+#ifdef __SWITCH2__
   // The program before this one in the process (the Homebrew Menu, or a Drako3D core on the way back) used the GPU:
   // Mesa needs a usable device and a new GSV root before SDL opens EGL.
   nx2MesaGpuRecover();
+#else
+  // (in the background: the drives are listed once mounted, and a library folder on one waits for it)
+  initializeUsbStorage();
+  launcherLog("USB storage %s",g_usbReady?"ready":"unavailable");
+#endif
   SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,"1");
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"linear");
   if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER|SDL_INIT_AUDIO)!=0) return startupFailure("SDL initialization failed.");
@@ -6194,8 +6305,12 @@ int main(int argc, char **argv){
   const int imageFlags=IMG_INIT_PNG|IMG_INIT_JPG;
   if((IMG_Init(imageFlags)&imageFlags)!=imageFlags) return startupFailure("Image initialization failed.");
   g_imgReady=true;
+#ifdef __SWITCH2__
   // (the Switch 2's handheld screen is 1080p as well)
   g_win=SDL_CreateWindow("ARMSX2-nx",0,0,1920,1080,SDL_WINDOW_FULLSCREEN);
+#else
+  g_win=SDL_CreateWindow("ARMSX2-nx",0,0,1280,720,SDL_WINDOW_FULLSCREEN);
+#endif
   if(!g_win) return startupFailure("Could not create the launcher window.");
   g_ren=SDL_CreateRenderer(g_win,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
   if(!g_ren) return startupFailure("Could not create the launcher renderer.");
@@ -6507,7 +6622,7 @@ libraryLoop:
     modalMessageStatic("Launch failed",{"This loader cannot start another program: open ARMSX2-nx from the Homebrew Menu."});
   if(launch&&!willChain){
     // Back to the library: the message above said why the game could not start.
-    nx2SetCpuBoost(false);
+    setLauncherCpuBoost(false);
     launch=false;
     running=true;
 #ifdef __SWITCH2__

@@ -31,8 +31,12 @@ namespace
 		"https://api.github.com/repos/NaGaa95/ARMSX2-nx/releases/latest";
 	constexpr char kReleaseAssetPrefix[] =
 		"https://github.com/NaGaa95/ARMSX2-nx/releases/download/";
-	// The Switch 2 launcher's asset: a release may carry other NROs, which this one never installs.
+	// This console's launcher asset: a release carries both, and each launcher installs its own only.
+#ifdef __SWITCH2__
 	constexpr char kAssetName[] = "armsx2-nx2.nro";
+#else
+	constexpr char kAssetName[] = "armsx2-nx.nro";
+#endif
 	constexpr std::size_t kMaxReleaseResponse = 2 * 1024 * 1024;
 	constexpr std::uint64_t kMinimumNroSize = 1024 * 1024;
 	constexpr std::uint64_t kMaximumNroSize = 512ULL * 1024 * 1024;
@@ -425,9 +429,9 @@ namespace
 		return true;
 	}
 
-	// Whether an NRO is a Switch 2 program: libounce programs carry an "OUN0" record after the MOD0 header naming their
-	// platform (1 Switch, 2 Switch 2); libnx programs have none.
-	bool TargetsSwitch2(FILE* file, const NroStart& start, const NroHeader& header)
+	// Whether an NRO is built for this console: libounce programs carry an "OUN0" record after the MOD0 header naming
+	// their platform (1 Switch, 2 Switch 2); libnx programs have none.
+	bool TargetsThisConsole(FILE* file, const NroStart& start, const NroHeader& header)
 	{
 		constexpr u32 MOD0_MAGIC = 0x30444F4D;
 		constexpr u32 OUN0_MAGIC = 0x304E554F;
@@ -454,7 +458,11 @@ namespace
 				}
 			}
 		}
+#ifdef __SWITCH2__
 		return platform == 2;
+#else
+		return platform != 2;
+#endif
 	}
 
 	bool ValidNro(const std::string& path, std::uint64_t expectedSize)
@@ -472,7 +480,7 @@ namespace
 			std::fread(&header, 1, sizeof(header), file) == sizeof(header);
 		const bool valid = read && header.magic == NROHEADER_MAGIC &&
 			header.size >= sizeof(start) + sizeof(header) && header.size <= static_cast<u64>(fileStat.st_size) &&
-			TargetsSwitch2(file, start, header);
+			TargetsThisConsole(file, start, header);
 		std::fclose(file);
 		if (!valid)
 			return false;

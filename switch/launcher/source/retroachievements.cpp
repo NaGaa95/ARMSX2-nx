@@ -178,8 +178,13 @@ RetroAchievementsLoginResult retroAchievementsLoginWithPassword(
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeResponse);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+#ifdef __SWITCH2__
   curl_easy_setopt(curl, CURLOPT_USERAGENT,
                    "ARMSX2-nx/" ARMSX2NX_VERSION " (Nintendo Switch 2)");
+#else
+  curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                   "ARMSX2-nx/" ARMSX2NX_VERSION " (Nintendo Switch)");
+#endif
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);

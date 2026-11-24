@@ -174,3 +174,8 @@ platforms/android/app/src/main/cpp/3rdparty/discord/include/
 /switch/deps/libusbhsfs-src/
 /switch/launcher/build/
 /switch/launcher/armsx2-nx2.*
+/switch/launcher/build_switch/
+/switch/launcher/armsx2-nx.elf
+/switch/launcher/armsx2-nx.nacp
+/switch/launcher/armsx2-nx.nro
+/switch/launcher/armsx2-nx.map
