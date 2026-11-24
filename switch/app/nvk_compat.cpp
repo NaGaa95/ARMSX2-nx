@@ -2,7 +2,7 @@
 // Copyright(c) 2026: PalindromicBreadLoaf (palindromicbreadloaf@tuta.com)
 // SPDX-License-Identifier: GPL-3.0+
 
-// newlib shims required by NXVK.
+// newlib shims Mesa's NVK needs (the Switch and Switch 2 Mesa SDKs).
 
 #include <sys/types.h>
 #include <dirent.h>

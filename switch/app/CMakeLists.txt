@@ -67,7 +67,7 @@ if(ARMSX2_DK3D)
 	target_link_libraries(yadokari PRIVATE ${ARMSX2_DK3D_LIBRARY})
 endif()
 
-if(USE_VULKAN OR (NINTENDO_SWITCH2 AND USE_OPENGL))
+if(USE_VULKAN OR USE_OPENGL)
 	if(NINTENDO_SWITCH2)
 		# mesa-nx (NVK; EGL with OpenGL on nvc0 and Zink), merged and localized by
 		# switch/deps/prepare_mesa_sdk_switch2.sh. By path: portlibs/switch2/lib has OunceVK's own libEGL.
@@ -80,19 +80,17 @@ if(USE_VULKAN OR (NINTENDO_SWITCH2 AND USE_OPENGL))
 			stdc++
 			m)
 	else()
-		find_package(PkgConfig REQUIRED)
-		if(USE_OPENGL)
-			pkg_check_modules(NXVK REQUIRED nxvk-gl)
-		else()
-			pkg_check_modules(NXVK REQUIRED nxvk)
-		endif()
-
-		# newlib shims required by NXVK.
+		# The Switch Mesa SDK (NVK; EGL with OpenGL on nvc0 and Zink), merged and localized by
+		# switch/deps/prepare_mesa_sdk_switch.sh, with the portlibs it needs after it.
 		target_sources(yadokari PRIVATE nvk_compat.cpp)
-		target_include_directories(yadokari PRIVATE ${NXVK_INCLUDE_DIRS})
-		target_compile_options(yadokari PRIVATE ${NXVK_CFLAGS_OTHER})
-
-		target_link_libraries(yadokari PRIVATE ${NXVK_LDFLAGS})
+		target_link_libraries(yadokari PRIVATE
+			"${SWITCH_MESA_SDK_ROOT}/lib/libmesa_local.a"
+			"${DEVKITPRO}/portlibs/switch/lib/libelf.a"
+			"${DEVKITPRO}/portlibs/switch/lib/libexpat.a"
+			"${DEVKITPRO}/portlibs/switch/lib/libzstd.a"
+			"${DEVKITPRO}/portlibs/switch/lib/libz.a"
+			stdc++
+			m)
 	endif()
 endif()
 
@@ -259,17 +257,11 @@ if(TARGET yadokari_shaders)
 endif()
 set_property(TARGET yadokari_romfs APPEND PROPERTY DKP_ASSET_FILES ${DK3D_DKSH_FILES} "${YADOKARI_RESOURCE_STAMP}")
 
-if(NINTENDO_SWITCH2)
-	# One core per GPU driver (drako3d cannot open the GPU after Mesa in the same program): the launcher chainloads
-	# the core of the renderer it was asked for.
-	set(YADOKARI_NRO_NAME "armsx2_${ARMSX2_SWITCH2_RENDERER}")
-	set(YADOKARI_NACP_NAME "ARMSX2-nx")
-	set(YADOKARI_NACP_AUTHOR "PalindromicBreadLoaf & naga")
-else()
-	set(YADOKARI_NRO_NAME "yadokari")
-	set(YADOKARI_NACP_NAME "Yadokari")
-	set(YADOKARI_NACP_AUTHOR "PalindromicBreadLoaf")
-endif()
+# One core per GPU driver (drako3d and deko3d cannot open the GPU after Mesa in the same program): the launcher
+# chainloads the core of the renderer it was asked for.
+set(YADOKARI_NRO_NAME "armsx2_${ARMSX2_CORE_RENDERER}")
+set(YADOKARI_NACP_NAME "ARMSX2-nx")
+set(YADOKARI_NACP_AUTHOR "PalindromicBreadLoaf & naga")
 
 nx_generate_nacp(OUTPUT ${YADOKARI_NRO_NAME}.nacp
 	NAME "${YADOKARI_NACP_NAME}"

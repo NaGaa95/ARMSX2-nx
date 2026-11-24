@@ -149,6 +149,15 @@ if(HORIZON AND NINTENDO_SWITCH2)
 		message(FATAL_ERROR "Switch 2 Mesa SDK not found in ${SWITCH_MESA_SDK_ROOT}: "
 			"run switch/deps/prepare_mesa_sdk_switch2.sh (switch/build-switch2.sh does)")
 	endif()
+elseif(HORIZON AND (USE_VULKAN OR USE_OPENGL))
+	# The Switch Mesa SDK (mesa-nx's unified SDK), prepared by switch/deps/prepare_mesa_sdk_switch.sh: NVK for the Vulkan
+	# core, EGL with OpenGL on nvc0 or Zink for the OpenGL core.
+	set(SWITCH_MESA_SDK_ROOT "${CMAKE_SOURCE_DIR}/switch/deps/switch_mesa_sdk"
+		CACHE PATH "The Switch Mesa SDK prepared by switch/deps/prepare_mesa_sdk_switch.sh")
+	if(NOT EXISTS "${SWITCH_MESA_SDK_ROOT}/lib/libmesa_local.a")
+		message(FATAL_ERROR "Switch Mesa SDK not found in ${SWITCH_MESA_SDK_ROOT}: "
+			"run switch/deps/prepare_mesa_sdk_switch.sh (switch/build-switch.sh does)")
+	endif()
 endif()
 
 if(USE_VULKAN)

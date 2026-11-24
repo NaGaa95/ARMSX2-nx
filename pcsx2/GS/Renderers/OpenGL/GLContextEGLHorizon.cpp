@@ -9,7 +9,9 @@
 
 #include "Config.h"
 
+#ifdef __SWITCH2__
 #include "nx2_platform.h"
+#endif
 
 #include <cstdlib>
 #include <string>
@@ -59,8 +61,10 @@ std::unique_ptr<GLContext> GLContextEGLHorizon::CreateSharedContext(const Window
 bool GLContextEGLHorizon::SetSwapInterval(s32 interval)
 {
 	const bool result = GLContextEGL::SetSwapInterval(interval);
+#ifdef __SWITCH2__
 	// Mesa sets its own interval on the window: nx2 puts the console's pacing back (120 Hz with VRR handheld).
 	nx2DisplayApply(interval);
+#endif
 	return result;
 }
 
@@ -83,13 +87,20 @@ EGLNativeWindowType GLContextEGLHorizon::GetNativeWindow(EGLConfig config)
 
 void GLContextEGLHorizon::FillWindowInfo(WindowInfo* wi)
 {
+#ifdef __SWITCH2__
 	u32 width = 1920, height = 1080;
 	nx2DisplaySize(&width, &height);
+	const float refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
+#else
+	// (the Switch's other renderers draw to the same 720p window)
+	const u32 width = 1280, height = 720;
+	const float refresh_rate = 60.0f;
+#endif
 	wi->type = WindowInfo::Type::VI;
 	wi->window_handle = nwindowGetDefault();
 	wi->surface_width = width;
 	wi->surface_height = height;
-	wi->surface_refresh_rate = static_cast<float>(nx2DisplayRefreshRate());
+	wi->surface_refresh_rate = refresh_rate;
 	wi->surface_scale = 1.0f;
 }
 
@@ -98,8 +109,15 @@ void GLContextEGLHorizon::PrepareDriver(bool zink)
 	// Read at eglInitialize, once per display.
 	setenv("MESA_SWITCH_GL_DRIVER", zink ? "zink" : "nvc0", 1);
 	setenv("MESA_LOADER_DRIVER_OVERRIDE", zink ? "zink" : "nouveau", 1);
+#ifdef __SWITCH2__
 	const std::string cache = Path::Combine(EmuFolders::Cache, zink ? "mesa-zink" : "mesa-nvc0");
+#else
+	// (one SD card serves both consoles, whose GPUs take other shader binaries)
+	const std::string cache = Path::Combine(EmuFolders::Cache, zink ? "mesa-zink-switch" : "mesa-nvc0-switch");
+#endif
 	setenv("MESA_SHADER_CACHE_DIR", cache.c_str(), 1);
+#ifdef __SWITCH2__
 	// The launcher ran Mesa earlier in this process: get a usable GPU device back.
 	nx2MesaGpuRecover();
+#endif
 }

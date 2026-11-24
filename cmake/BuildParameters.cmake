@@ -60,9 +60,10 @@ if(NOT APPLE AND NOT HORIZON)
 endif()
 
 # The Switch's native GS renderer: deko3d on the Switch, drako3d (deko3d's API on the Ampere GPU) on the Switch 2.
-# The Switch 2 builds one core per GPU driver, since drako3d cannot open the GPU after Mesa ran in the same program:
-# ARMSX2_SWITCH2_RENDERER is drako3d (DK3D), vulkan (Mesa's NVK, from mesa-nx) or opengl (mesa-nx's OpenGL on nvc0, or
-# on Zink over NVK: a program uses nvc0 or Vulkan, not both).
+# Both consoles build one core per GPU driver, since deko3d and drako3d cannot open the GPU after Mesa ran in the same
+# program: ARMSX2_SWITCH2_RENDERER (Switch 2) is drako3d (DK3D), vulkan (Mesa's NVK, from mesa-nx) or opengl (mesa-nx's
+# OpenGL on nvc0, or on Zink over NVK: a program uses nvc0 or Vulkan, not both); ARMSX2_SWITCH_RENDERER (Switch) is
+# deko3d, vulkan or opengl, on mesa-nx's unified Switch SDK. ARMSX2_CORE_RENDERER names the core either way.
 set(ARMSX2_DK3D OFF)
 if(HORIZON)
 	if(NINTENDO_SWITCH2)
@@ -84,9 +85,26 @@ if(HORIZON)
 		else()
 			message(FATAL_ERROR "ARMSX2_SWITCH2_RENDERER must be drako3d, vulkan or opengl, not '${ARMSX2_SWITCH2_RENDERER}'")
 		endif()
+		set(ARMSX2_CORE_RENDERER "${ARMSX2_SWITCH2_RENDERER}")
 	else()
-		set(ARMSX2_DK3D ON)
-		set(ARMSX2_DK3D_LIBRARY deko3d)
+		# The Switch builds the same three cores on its own drivers: deko3d (DK3D), and the Switch Mesa SDK's NVK for
+		# Vulkan, nvc0 or Zink for OpenGL.
+		set(ARMSX2_SWITCH_RENDERER "deko3d" CACHE STRING "Switch core GPU driver: deko3d, vulkan or opengl")
+		set_property(CACHE ARMSX2_SWITCH_RENDERER PROPERTY STRINGS deko3d vulkan opengl)
+		set(USE_OPENGL OFF CACHE BOOL "Enable OpenGL GS renderer" FORCE)
+		if(ARMSX2_SWITCH_RENDERER STREQUAL "deko3d")
+			set(ARMSX2_DK3D ON)
+			set(ARMSX2_DK3D_LIBRARY deko3d)
+			set(USE_VULKAN OFF CACHE BOOL "Enable Vulkan GS renderer" FORCE)
+		elseif(ARMSX2_SWITCH_RENDERER STREQUAL "vulkan")
+			set(USE_VULKAN ON CACHE BOOL "Enable Vulkan GS renderer" FORCE)
+		elseif(ARMSX2_SWITCH_RENDERER STREQUAL "opengl")
+			set(USE_VULKAN OFF CACHE BOOL "Enable Vulkan GS renderer" FORCE)
+			set(USE_OPENGL ON CACHE BOOL "Enable OpenGL GS renderer" FORCE)
+		else()
+			message(FATAL_ERROR "ARMSX2_SWITCH_RENDERER must be deko3d, vulkan or opengl, not '${ARMSX2_SWITCH_RENDERER}'")
+		endif()
+		set(ARMSX2_CORE_RENDERER "${ARMSX2_SWITCH_RENDERER}")
 	endif()
 endif()
 option(USE_VULKAN "Enable Vulkan GS renderer" ON)

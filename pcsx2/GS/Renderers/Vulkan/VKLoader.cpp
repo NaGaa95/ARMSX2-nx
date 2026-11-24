@@ -229,10 +229,15 @@ bool Vulkan::IsVulkanLibraryLoaded()
 bool Vulkan::LoadVulkanLibrary(Error* error)
 {
 #ifdef __SWITCH__
-	// Set required NXVK environment variables.
+	// NVK's environment, read at vkCreateInstance.
 	setenv("NVK_I_WANT_A_BROKEN_VULKAN_DRIVER", "1", 1);
 
+#ifdef __SWITCH2__
 	const std::string mesa_cache_dir = Path::Combine(EmuFolders::Cache, "mesa");
+#else
+	// (one SD card serves both consoles, whose GPUs take other shader binaries)
+	const std::string mesa_cache_dir = Path::Combine(EmuFolders::Cache, "mesa-switch");
+#endif
 	if (FileSystem::CreateDirectoryPath(mesa_cache_dir.c_str(), true))
 	{
 		setenv("MESA_SHADER_CACHE_DISABLE", "false", 1);
