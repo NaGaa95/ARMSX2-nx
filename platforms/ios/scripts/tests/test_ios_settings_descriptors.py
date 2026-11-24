@@ -1,13 +1,10 @@
 import re
 import unittest
 
-from ios_source import block, store_text, swift
-
-
-STORE = swift("SettingsStore.swift")
+from ios_source import block, store_inits, store_text, swift
 
 DESCRIPTOR = re.compile(r"let _(\w+)Config = Setting<([^>]+)>\(")
-COMMIT = re.compile(r"commit\(_(\w+)Config, (\w+)\)")
+COMMIT = re.compile(r"commit\((?:Self\.)?_(\w+)Config, (\w+)\)")
 RESET_FUNCS = ("resetEmulatorDefaults", "resetGraphicsDefaults", "resetAllDefaults")
 
 # init() loads these by hand, and each says why on the line above it. Their
@@ -18,6 +15,19 @@ HAND_LOADED = {
     "lastActiveOsdPreset": "-1 means never set, and then the preset decides",
     "osdPerformancePosition": "old INIs hold positions this build no longer offers",
     "jitScriptProtocol": "JITScriptProtocol.normalized maps names older builds wrote",
+}
+
+# Read live with load() where the screens need them, never cached in init(): the
+# runtime and the RA bridge write these keys, so a stored copy would go stale.
+LIVE_READS = {
+    "achievementsEnabled": "the runtime and the RA bridge write Achievements/Enabled, "
+                           "so a value cached in init would go stale",
+    "achievementsChallengeMode": "the runtime and the RA bridge write Achievements/ChallengeMode, "
+                                 "so a value cached in init would go stale",
+    "bootISO": "the boot and change-disc bridges write GameISO/BootISO",
+    "lastGame": "the save-state bridge writes ARMSX2iOS/Boot/LastGame",
+    "verboseLogging": "ARMSX2Bridge.setVerboseLogging writes Logging/EnableVerbose with two other "
+                      "keys and a CPU-thread hop; the store only reads it",
 }
 
 # Migrations run from init() before any property is loaded, and want the value as
@@ -50,8 +60,9 @@ def call_at(lines, first):
 class SettingsDescriptorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = STORE.read_text(encoding="utf-8")
-        cls.lines = cls.source.split("\n")
+        stores = store_inits()
+        cls.source = "\n".join(text for _, text, _, _ in stores)
+        cls.lines = store_text().split("\n")
         # Every Setting in the store: name -> (section, key, default).
         cls.descriptors = {}
         for i, line in enumerate(cls.lines):
@@ -65,9 +76,9 @@ class SettingsDescriptorTests(unittest.TestCase):
                 re.search(r"default: (.*?),", blob).group(1).strip(),
             )
         # The property each descriptor belongs to, read off its commit call.
-        owner = {m.group(1): m.group(2) for m in COMMIT.finditer(cls.source)}
+        owner = {m.group(1): m.group(2) for m in COMMIT.finditer(store_text())}
         cls.property_of = {name: owner.get(name, name) for name in cls.descriptors}
-        cls.init_body = block(cls.source, "private init()")
+        cls.init_body = "\n".join(init for _, _, _, init in stores)
         # The whole store, extensions included, so a read that moved into a
         # helper file cannot slip past the checks below.
         cls.store_source = store_text()
@@ -84,12 +95,19 @@ class SettingsDescriptorTests(unittest.TestCase):
                 assigned = re.findall(rf"^\s*{re.escape(prop)} = (.+)$", self.init_body, re.M)
                 self.assertFalse(any(".load(" in rhs for rhs in assigned),
                                  f"{prop} loads through its descriptor now; drop the exemption")
+        for name in LIVE_READS:
+            with self.subTest(live=name):
+                self.assertIn(name, self.descriptors, f"{name} is no longer a descriptor")
+                self.assertNotRegex(self.init_body, rf"(?m)^\s*{re.escape(name)} = ",
+                                    f"init assigns {name}, so it is cached; drop the exemption")
         self.assertEqual(sorted(MIGRATION_READS - self.by_hand), [],
                          "these are exempted but nothing reads them by hand any more")
 
     def test_every_descriptor_is_loaded_in_init(self):
         """A setting init() never loads keeps its declared default instead of the INI value."""
         for name, prop in self.property_of.items():
+            if name in LIVE_READS:
+                continue
             with self.subTest(setting=prop):
                 assigned = re.findall(rf"^\s*{re.escape(prop)} = (.+)$", self.init_body, re.M)
                 self.assertTrue(assigned, f"{prop} is never assigned in init()")
@@ -134,17 +152,21 @@ class SettingsDescriptorTests(unittest.TestCase):
     def test_every_descriptor_backed_setter_goes_through_commit(self):
         """Anything writing the INI its own way skips suppression and the graphics apply."""
         for name, prop in self.property_of.items():
+            if name in LIVE_READS:
+                continue
             with self.subTest(setting=prop):
-                declared = next((l for l in self.lines
+                declared = next((l for l in self.source.split("\n")
                                  if re.match(rf"^\s*var {re.escape(prop)}\b", l)), None)
                 self.assertIsNotNone(declared, f"cannot find the declaration of {prop}")
                 observer = block(self.source, declared)
-                self.assertIn(f"commit(_{name}Config, {prop})", observer,
-                              f"{prop}'s didSet does not commit itself through _{name}Config")
+                self.assertRegex(observer, rf"commit\((?:Self\.)?_{name}Config, {re.escape(prop)}\)",
+                                 f"{prop}'s didSet does not commit itself through _{name}Config")
 
     def test_the_property_starts_on_its_descriptor_default(self):
         """Swift will not let the initializer say _xConfig.defaultValue, so check it here."""
         for name, (_, _, default) in self.descriptors.items():
+            if name in LIVE_READS:
+                continue
             prop = self.property_of[name]
             # The declaration wraps onto a second line when the name is long.
             declaration = re.search(rf"^\s*var {re.escape(prop)}(?::[^=]+)? = (.+?) \{{\s*didSet",
@@ -161,10 +183,11 @@ class SettingsDescriptorTests(unittest.TestCase):
 
     def test_resets_agree_with_the_descriptor_defaults(self):
         """Reset functions assign literals, so each is compared with its descriptor default."""
-        by_property = {self.property_of[n]: (n, d) for n, (_, _, d) in self.descriptors.items()}
+        by_property = {self.property_of[n]: (n, d) for n, (_, _, d) in self.descriptors.items()
+                       if n not in LIVE_READS}
         for func in RESET_FUNCS:
             for line in block(self.store_source, f"func {func}").split("\n"):
-                match = re.match(r"^\s*(\w+) = (.+?)(?:\s*//.*)?$", line)
+                match = re.match(r"^\s*(?:controller\.|network\.)?(\w+) = (.+?)(?:\s*//.*)?$", line)
                 if not match or match.group(1) not in by_property:
                     continue
                 name, default = by_property[match.group(1)]

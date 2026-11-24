@@ -130,6 +130,7 @@ set(pcsx2Sources
 	R3000AInterpreter.cpp
 	R3000AOpcodeTables.cpp
 	R5900.cpp
+	R5900IssueModel.cpp
 	R5900OpcodeImpl.cpp
 	R5900OpcodeTables.cpp
 	SaveState.cpp
@@ -239,6 +240,7 @@ set(pcsx2Headers
 	PrecompiledHeader.h
 	R3000A.h
 	R5900.h
+	R5900IssueModel.h
 	R5900OpcodeTables.h
 	SaveState.h
 	SaveStateLegacy.h
@@ -638,11 +640,13 @@ set(pcsx2GSSources
 	GS/Renderers/Null/GSDeviceNone.cpp
 	GS/Renderers/Null/GSRendererNull.cpp
 	GS/Renderers/HW/GSBurstMemo.cpp
+	GS/Renderers/HW/GSDrawRow.cpp
 	GS/Renderers/HW/GSDrawLog.cpp
 	GS/Renderers/HW/GSHwHack.cpp
 	GS/Renderers/HW/GSLineRuns.cpp
 	GS/Renderers/HW/GSRendererHW.cpp
 	GS/Renderers/HW/GSRendererHWBurstMemo.cpp
+	GS/Renderers/HW/GSRendererHWCopyRuns.cpp
 	GS/Renderers/HW/GSTextureCache.cpp
 	GS/Renderers/HW/GSTextureReplacementLoaders.cpp
 	GS/Renderers/HW/GSTextureReplacements.cpp
@@ -698,6 +702,9 @@ set(pcsx2GSHeaders
 	GS/Renderers/Common/GSBlendCarry.h
 	GS/Renderers/Common/GSBlendConstantPolicy.h
 	GS/Renderers/Common/GSRunsPolicy.h
+	GS/Renderers/Common/GSRowEmitter.h
+	GS/Renderers/Common/GSRawBindCache.h
+	GS/Renderers/Common/GSShortRunTextures.h
 	GS/Renderers/Common/GSBackThreadPolicy.h
 	GS/Renderers/Common/GSCopyRoadBlendingPolicy.h
 	GS/Renderers/Common/GSDynamicFeedbackLoopPolicy.h
@@ -729,6 +736,7 @@ set(pcsx2GSHeaders
 	GS/Renderers/Common/GSSnapshotPolicy.h
 	GS/Renderers/Common/GSTargetSizePolicy.h
 	GS/Renderers/Common/GSStreamRingFlushRange.h
+	GS/Renderers/Common/GSStreamRingRegistry.h
 	GS/Renderers/Common/GSStreamRingGrowth.h
 	GS/Renderers/Common/GSStreamRingMemoryPolicy.h
 	GS/Renderers/Common/GSTexture.h
@@ -745,6 +753,7 @@ set(pcsx2GSHeaders
 	GS/Renderers/HW/GSHwHack.h
 	GS/Renderers/HW/GSLineRuns.h
 	GS/Renderers/HW/GSBurstMemo.h
+	GS/Renderers/HW/GSDrawRow.h
 	GS/Renderers/HW/GSDepthFormatMove.h
 	GS/Renderers/HW/GSLineWalk.h
 	GS/Renderers/HW/GSPointPlace.h
@@ -862,7 +871,7 @@ if(USE_VULKAN)
 	list(APPEND pcsx2GSSources
 		GS/Renderers/Vulkan/GSDeviceVK.cpp
 		GS/Renderers/Vulkan/GSLsfg.cpp
-		GS/Renderers/Vulkan/GSRunsVK.cpp
+		GS/Renderers/Vulkan/GSRunEmitterVK.cpp
 		GS/Renderers/Vulkan/GSTextureVK.cpp
 		GS/Renderers/Vulkan/vk_mem_alloc.cpp
 		GS/Renderers/Vulkan/VKBuilders.cpp
@@ -934,7 +943,7 @@ if(USE_VULKAN)
 	list(APPEND pcsx2GSHeaders
 		GS/Renderers/Vulkan/GSDeviceVK.h
 		GS/Renderers/Vulkan/GSLsfg.h
-		GS/Renderers/Vulkan/GSRunsVK.h
+		GS/Renderers/Vulkan/GSRunEmitterVK.h
 		GS/Renderers/Vulkan/GSTextureVK.h
 		GS/Renderers/Vulkan/VKLibretro.h
 		GS/Renderers/Vulkan/VKBuilders.h
@@ -1510,7 +1519,6 @@ set(pcsx2arm64Sources
 	arm64/vuaot/VuAotIR.cpp
 	arm64/vuaot/VuAotLower.cpp
 	arm64/vuaot/VuAotMvuTrace.cpp
-	arm64/vuaot/VuAotPersist.cpp
 	arm64/vuaot/VuAotPipe.cpp
 	arm64/vuaot/VuAotTier.cpp
 	arm64/vuaot/VuAotRegion.cpp
@@ -1528,6 +1536,9 @@ set(pcsx2arm64Headers
 	arm64/iR5900-arm64.h
 	arm64/iR5900Analysis.h
 	arm64/microVU-arm64.h
+	arm64/microVU_ChunkPack-arm64.inl
+	arm64/microVU_ChunkStore-arm64.h
+	arm64/microVU_ChunkStore-arm64.inl
 	arm64/microVU_Persist-arm64.h
 	arm64/microVU_Persist-arm64.inl
 	arm64/microVU_ProgCache-arm64.h
@@ -1538,7 +1549,6 @@ set(pcsx2arm64Headers
 	arm64/microVU_JumpTable-arm64.h
 	arm64/vuaot/VuAotBackground.h
 	arm64/vuaot/VuAotDecode.h
-	arm64/vuaot/VuAotPersist.h
 	arm64/vuaot/VuAotGraph.h
 	arm64/vuaot/VuAotIR.h
 	arm64/vuaot/VuAotLive.h
@@ -1552,7 +1562,6 @@ set(pcsx2arm64Headers
 # Mobile (arm64) platform sources, relocated from the former android/iOS core
 # forks (refresh-experimental / iOS-refresh). Source wiring only: real NDK /
 # Xcode builds are required to validate include paths and link deps.
-# See REFACTOR_STATUS.md.
 # tvOS is the same platform as far as this build is concerned: no libpcap, no
 # OpenGL, Metal for the GS, and the same Apple embedded rules about what a
 # process may map and load. The buildbot's templates already pass -DIOS=ON for
@@ -1654,12 +1663,13 @@ if(ARMSX2_IOS)
 		# iOS has no libpcap, so pcap_io.cpp is excluded above; reuse the (platform-
 		# agnostic) Android stub to supply the PCAPAdapter definitions DEV9 references.
 		Android/AndroidPcapStubs.cpp)
-	# MacOSStubs.cpp excludes itself on the embedded platforms (it is
-	# !TARGET_OS_IPHONE throughout), so what those need instead is here: the
+	# MacOSStubs.cpp holds the CocoaTools stubs every iOS and tvOS build
+	# compiles. A core also needs what AppleEmbeddedStubs.cpp adds: the
 	# optical drive CDVDdiscReader names, the sound CocoaTools would have
-	# played, and the downloader there is no libcurl for. Only for a core: the
-	# iOS app answers for all of it in its own IOS/HostImpls.mm, and two
-	# definitions of each is a duplicate symbol at link.
+	# played, and the downloader there is no libcurl for. The iOS app answers
+	# for all of it in platforms/ios/Runtime (HostImpls.mm and
+	# PlaySoundAsync.mm), and two definitions of each is a duplicate
+	# symbol at link.
 	if(ENABLE_LIBRETRO)
 		list(APPEND pcsx2Sources
 			Apple/AppleEmbeddedStubs.cpp)

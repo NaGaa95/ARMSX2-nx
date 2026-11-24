@@ -69,11 +69,7 @@ final class GameplayShortcutCoordinator {
             return nextPercent
         }
 
-        let storedPercent = Int((ARMSX2Bridge.getINIFloat(
-            "Framerate",
-            key: "NominalScalar",
-            defaultValue: 1.0
-        ) * 100).rounded())
+        let storedPercent = Int((SettingsStore.storedNominalScalar * 100).rounded())
         let currentPercent = session.runtimeShortcutSpeedPercent ?? storedPercent
         let minimumPercent = ARMSX2Bridge.isRetroAchievementsHardcoreActive()
             ? 100
@@ -164,7 +160,7 @@ final class GameplayShortcutCoordinator {
             feedback.presentRetroAchievementsToast(
                 title: settings.localized("No Quick Save yet"),
                 message: settings.localized("Create one by pressing")
-                    + " \(settings.controllerMacroSaveGameState.title).",
+                    + " \(settings.controller.controllerMacroSaveGameState.title).",
                 badgePath: "",
                 duration: nil
             )

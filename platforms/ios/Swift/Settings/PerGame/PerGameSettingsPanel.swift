@@ -64,7 +64,7 @@ struct PerGameSettingsPanel: View {
 
     init(
         game: ISOEntry,
-        preloadedSettings: [String: Any]? = nil,
+        preloadedSettings: [ARMSX2PerGameKey: Any]? = nil,
         savesToRunningGame: Bool = false,
         initiallySelectsGameController: Bool = false,
         initiallySelectsShaders: Bool = false,
@@ -257,7 +257,7 @@ struct PerGameSettingsPanel: View {
         .onChange(of: livePreviewDismissRequest) { _, _ in
             livePreview.dismissRequested()
         }
-        .onChange(of: settings.temporalSaveStateToLivePreviewChanges) {
+        .onChange(of: settings.appearance.temporalSaveStateToLivePreviewChanges) {
             _, enabled in
             livePreview.temporalPreviewSettingChanged(enabled)
         }

@@ -6,9 +6,6 @@ import UIKit
 import GameController
 import Observation
 
-private let runtimeMenuStateChangedNotification = Notification.Name("ARMSX2iOSRuntimeMenuStateChanged")
-let retroAchievementsToastNotification = Notification.Name("ARMSX2RetroAchievementsNotification")
-
 private struct GameScreenSizePreferenceKey: PreferenceKey {
     static let defaultValue: CGSize = .zero
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
@@ -32,7 +29,7 @@ struct GameScreenView: View {
     @State private var appState = AppState.shared
     @State private var session = GameSession.shared
     @State private var settings = SettingsStore.shared
-    @State private var dynamicSettings = DynamicThumbstickSettings.shared
+    @State private var dynamicSettings = SettingsStore.shared.dynamicThumbsticks
     @State private var layoutPresets = PadLayoutPresetStore.shared
     @State private var skinLibrary = VPadSkinLibraryStore.shared
     @State private var touchActionSession = VirtualPadTouchActionSession()
@@ -113,7 +110,7 @@ struct GameScreenView: View {
                             fold: fold,
                             refitting: appState.hingePresent && effectiveVirtualPadVisible
                                 ? effectivePadLayoutSnapshot ?? PadLayoutStore.shared.snapshot() : nil,
-                            analogStickScale: settings.analogStickScale
+                            analogStickScale: settings.controller.analogStickScale
                         )
                         PhoneGameSurface()
                             .frame(height: gameHeight)
@@ -257,7 +254,7 @@ struct GameScreenView: View {
             guard request != nil,
                   overlay.overlayRoute == .hidden,
                   !shortcuts.operationActive else { return }
-            if settings.hapticFeedback { GameEventHaptics.shared.medium.impactOccurred() }
+            if settings.controller.hapticFeedback { GameEventHaptics.shared.medium.impactOccurred() }
             controllerInput?.setMenuActive(true)
             controllerInput?.playFeedback(.tabTransition)
             refreshRuntimeMenuState()
@@ -288,10 +285,10 @@ struct GameScreenView: View {
             guard previous != nil, current == nil else { return }
             applyFullscreenState(fullScreen)
         }
-        .onChange(of: settings.hideGameplayStatusBar) { _, _ in
+        .onChange(of: settings.appearance.hideGameplayStatusBar) { _, _ in
             updateGameplayStatusBar(forFullscreen: fullScreen)
         }
-        .onChange(of: settings.hideMenuButton) { _, isHidden in
+        .onChange(of: settings.controller.hideMenuButton) { _, isHidden in
             if menuButtonHidden != isHidden {
                 menuButtonHidden = isHidden
             }
@@ -309,12 +306,12 @@ struct GameScreenView: View {
                 enterEmulationOnlyModeIfReady()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: runtimeMenuStateChangedNotification)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .ARMSX2iOSRuntimeMenuStateChanged)) { _ in
             refreshRuntimeMenuState()
         }
         .onReceive(
             NotificationCenter.default.publisher(
-                for: AppState.emulationOnlyResourcesReleasedNotification
+                for: .ARMSX2iOSEmulationOnlyResourcesReleased
             )
         ) { _ in
             finishEmulationOnlyActivation()
@@ -329,7 +326,7 @@ struct GameScreenView: View {
         .onReceive(NotificationCenter.default.publisher(for: gameplaySurfaceTapNotification)) { _ in
             revealMenuButtonBriefly()
         }
-        .onReceive(NotificationCenter.default.publisher(for: retroAchievementsToastNotification)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .ARMSX2RetroAchievements)) { _ in
             feedback.consumePendingRetroAchievementsToast()
         }
         .persistentSystemOverlays(.hidden)
@@ -354,7 +351,7 @@ struct GameScreenView: View {
         Button {
             controllerInput?.setMenuActive(true)
             MenuAudioPackManager.shared.playEvent(.tabTransition)
-            if settings.hapticFeedback { GameEventHaptics.shared.light.impactOccurred() }
+            if settings.controller.hapticFeedback { GameEventHaptics.shared.light.impactOccurred() }
             refreshRuntimeMenuState()
             overlay.overlayRoute = .paused
         } label: {
@@ -464,7 +461,7 @@ struct GameScreenView: View {
         } else {
             // BIOS and serial-less ELF sessions have no per-game key, so keep the Global Default.
             skinLibrary.selectSkin(id: skin.id)
-            settings.virtualPadSkin = skin.virtualPadSkin
+            settings.controller.virtualPadSkin = skin.virtualPadSkin
         }
 
         // UIKit controls cache their artwork and hit masks, so rebuild the pad now.
@@ -481,7 +478,7 @@ struct GameScreenView: View {
     private func leaveGameplaySystemChromeMode() {
         if case .menu = appState.currentScreen {
             appState.hideHomeIndicator = false
-            appState.hideStatusBar = settings.hideMenuStatusBar
+            appState.hideStatusBar = settings.appearance.hideMenuStatusBar
         } else {
             appState.hideHomeIndicator = previousHideHomeIndicator
             appState.hideStatusBar = previousHideStatusBar
@@ -499,9 +496,9 @@ struct GameScreenView: View {
     }
 
     private func applyInitialFullscreenPreference() {
-        menuButtonHidden = settings.hideMenuButton
+        menuButtonHidden = settings.controller.hideMenuButton
         // Reconciled on every game entry, so a changed setting applies on the next boot.
-        let desired = settings.autoFullscreen
+        let desired = settings.controller.autoFullscreen
         if fullScreen != desired {
             fullScreen = desired
         }
@@ -517,7 +514,7 @@ struct GameScreenView: View {
     }
 
     private func updateGameplayStatusBar(forFullscreen isFullscreen: Bool) {
-        let shouldHide = settings.hideGameplayStatusBar
+        let shouldHide = settings.appearance.hideGameplayStatusBar
             && isFullscreen
             && session.gameplayLaunchTransition == nil
         if appState.hideStatusBar != shouldHide {
@@ -599,7 +596,7 @@ struct GameScreenView: View {
                     undo: saveStateUndo,
                     settings: settings,
                     hint: externalControllerConnected
-                        ? ControllerHintLine(parts: [.init(settings.controllerMacroUndoSaveState, settings.localized("Undo"))])
+                        ? ControllerHintLine(parts: [.init(settings.controller.controllerMacroUndoSaveState, settings.localized("Undo"))])
                         : nil,
                     onUndo: shortcuts.undoSaveStateAction
                 )
@@ -632,7 +629,7 @@ struct GameScreenView: View {
             return session.emulationOnlyPresentation.showsVirtualControls
         }
         return session.userVirtualPadVisible &&
-            (!settings.autoHideVirtualPadWhenControllerConnected || !externalControllerConnected) &&
+            (!settings.controller.autoHideVirtualPadWhenControllerConnected || !externalControllerConnected) &&
             overlay.overlayRoute != .pausedPresenting(.padLayout)
     }
 
@@ -680,16 +677,16 @@ struct GameScreenView: View {
     }
 
     private func runtimePadLayoutIdentity(
-        from info: [String: Any]?
+        from info: [ARMSX2PerGameKey: Any]?
     ) -> PadLayoutGameIdentity? {
         guard let info else { return nil }
         return PadLayoutGameIdentity(
-            serial: info["serial"] as? String,
-            crc: info["crc"] as? String
+            serial: info[.serial] as? String,
+            crc: info[.crc] as? String
         )
     }
 
     private var virtualPadHiddenByController: Bool {
-        session.userVirtualPadVisible && settings.autoHideVirtualPadWhenControllerConnected && externalControllerConnected
+        session.userVirtualPadVisible && settings.controller.autoHideVirtualPadWhenControllerConnected && externalControllerConnected
     }
 }

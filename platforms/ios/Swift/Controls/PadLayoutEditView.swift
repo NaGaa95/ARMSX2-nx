@@ -98,7 +98,7 @@ struct PadLayoutEditView: View {
             let snapshot = layout.snapshot()
             let splitKey = [geo.size.width, geo.size.height, fold?.minY, fold?.height, CGFloat(refitGeneration)]
             let liveSplit = !isActuallyLandscape && AppState.shared.hingePresent
-                ? portraitGameSplit(geo, deckHeight: deckHeight, fold: fold, refitting: snapshot, analogStickScale: settings.analogStickScale)
+                ? portraitGameSplit(geo, deckHeight: deckHeight, fold: fold, refitting: snapshot, analogStickScale: settings.controller.analogStickScale)
                 : nil
             let split = heldSplit?.key == splitKey ? heldSplit : liveSplit.map { (key: splitKey, gameHeight: $0.gameHeight, fit: $0.fit) }
             let portraitGameHeight = split.map { $0.gameHeight + (fold?.height ?? 0) } ?? min(geo.size.width * 3 / 4, geo.size.height * 0.55)
@@ -110,7 +110,7 @@ struct PadLayoutEditView: View {
                     snapshot.fittedToPortraitDeck(
                         $0,
                         size: CGSize(width: editAreaW, height: editAreaH),
-                        analogStickScale: CGFloat(SettingsStore.clampedAnalogStickScale(settings.analogStickScale))
+                        analogStickScale: CGFloat(SettingsStore.clampedAnalogStickScale(settings.controller.analogStickScale))
                     )
                 } ?? snapshot
             }
@@ -427,10 +427,8 @@ struct PadLayoutEditView: View {
         // Only create or update a layout preset when the layout geometry actually
         // changed. Skin-only preview/reset must not force "Save as New Layout".
         guard editorIsModified else {
-            // The editor temporarily applies a preset to the shared working
-            // layout. Always restore that working copy on exit; gameplay reads
-            // the saved preset directly. Leaking this temporary copy used to
-            // make a preset appear to work only after opening the editor once.
+            // The editor applies a preset to the shared working layout, and
+            // gameplay reads the saved preset, so the working copy is always restored.
             finishPresetEditRestoringOriginal()
             return
         }
@@ -490,12 +488,11 @@ struct PadLayoutEditView: View {
 
     private func finishPresetEditRestoringOriginal() {
         if let originalSnapshot {
-            // Roll back the temporary layout working copy while keeping any skin
-            // change made inside the editor (skin reset/selection is skin-only).
-            let currentSkin = settings.virtualPadSkin
+            // Roll back the layout working copy but keep a skin change made in the editor.
+            let currentSkin = settings.controller.virtualPadSkin
             let currentSkinID = skinLibrary.selectedSkinID
             restore(snapshot: originalSnapshot)
-            settings.virtualPadSkin = currentSkin
+            settings.controller.virtualPadSkin = currentSkin
             skinLibrary.selectSkin(id: currentSkinID)
         }
         undoStack.removeAll()
@@ -539,7 +536,7 @@ struct PadLayoutEditView: View {
                     guard skinLibrary.selectedSkinID != skin.id else { return }
                     pushSnapshot()
                     skinLibrary.selectSkin(id: skin.id)
-                    settings.virtualPadSkin = skin.virtualPadSkin
+                    settings.controller.virtualPadSkin = skin.virtualPadSkin
                 } label: {
                     Label(settings.localized(skin.displayName), systemImage: skinLibrary.selectedSkinID == skin.id ? "checkmark" : "circle")
                 }
@@ -623,7 +620,7 @@ struct PadLayoutEditView: View {
 
     @ViewBuilder
     private func editorControls(areaW: CGFloat, areaH: CGFloat, isLandscape: Bool, fitted: PadLayoutSnapshot? = nil, fit: PadPortraitFit? = nil) -> some View {
-        let stickScale = CGFloat(SettingsStore.clampedAnalogStickScale(settings.analogStickScale))
+        let stickScale = CGFloat(SettingsStore.clampedAnalogStickScale(settings.controller.analogStickScale))
         let overlaps = overlappingControlIDs(
             in: (fitted ?? layout.snapshot()).controlGeometries(size: CGSize(width: areaW, height: areaH), landscape: isLandscape, analogStickScale: stickScale)
         )
@@ -690,7 +687,7 @@ struct PadLayoutEditView: View {
             perButtonPortrait: layout.perButtonPortrait,
             perButtonLandscape: layout.perButtonLandscape,
             controlVisibility: layout.controlVisibility,
-            skin: settings.virtualPadSkin,
+            skin: settings.controller.virtualPadSkin,
             skinID: skinLibrary.selectedSkinID
         )
     }
@@ -702,7 +699,7 @@ struct PadLayoutEditView: View {
         layout.perButtonLandscape = snapshot.perButtonLandscape
         layout.controlVisibility = snapshot.controlVisibility
         skinLibrary.selectSkin(id: snapshot.skinID)
-        settings.virtualPadSkin = snapshot.skin
+        settings.controller.virtualPadSkin = snapshot.skin
         refitGeneration += 1
     }
 

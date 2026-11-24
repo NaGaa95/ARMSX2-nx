@@ -4,7 +4,6 @@
 #include <SDL3/SDL_metal.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -22,13 +21,11 @@
 #include "common/ProgressCallback.h"
 #include "common/WindowInfo.h"
 
-#include "pcsx2/Counters.h"          // g_FrameCount
 #include "pcsx2/Config.h"            // EmuConfig, GSConfig
 #include "pcsx2/Host.h"
 #include "pcsx2/Host/AudioStreamTypes.h"
 #include "pcsx2/MTGS.h" // Host::RunOnGSThread
 #include "pcsx2/INISettingsInterface.h"
-#include "pcsx2/PerformanceMetrics.h"
 #include "pcsx2/R5900.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SIO/Pad/PadDualshock2.h"
@@ -111,8 +108,8 @@ namespace Host
         vprintf(fmt, args);
         va_end(args);
     }
-    void LoadSettings(SettingsInterface&, std::unique_lock<std::mutex>&) {} 
-    void RequestResetSettings(bool) {} 
+    void LoadSettings(SettingsInterface&, std::unique_lock<std::mutex>&) {}
+    void RequestResetSettings(bool) {}
     const char* GetTranslatedStringImpl(const char* key) { return key; }
     u32 GetDisplayRefreshRate() { return 60; }
     std::optional<WindowInfo> AcquireRenderWindow(bool) {
@@ -120,16 +117,16 @@ namespace Host
             Console.Error("Host::AcquireRenderWindow: g_sdl_window is NULL");
             return std::nullopt;
         }
-        
+
         __block WindowInfo wi = {};
         wi.type = WindowInfo::Type::MacOS;
-        
+
         // SDL calls that interact with UIKit must run on the main thread
         dispatch_sync(dispatch_get_main_queue(), ^{
             // SDL3 properties for UIKit
             SDL_PropertiesID props = SDL_GetWindowProperties(g_sdl_window);
             UIWindow* window = (__bridge UIWindow*)SDL_GetPointerProperty(props, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
-            
+
             if (window) {
                 // Use dedicated game render view if available (sized for portrait).
                 if (g_gameRenderView) {
@@ -155,7 +152,7 @@ namespace Host
             wi.surface_width = static_cast<u32>(std::max<CGFloat>(1.0, renderView.bounds.size.width * scale));
             wi.surface_height = static_cast<u32>(std::max<CGFloat>(1.0, renderView.bounds.size.height * scale));
             wi.surface_scale = static_cast<float>(scale);
-            
+
             SDL_DisplayID display = SDL_GetDisplayForWindow(g_sdl_window);
             const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display);
             if (mode)
@@ -379,46 +376,7 @@ namespace Host
     void OpenHostFileSelectorAsync(std::string_view, bool, std::function<void(const std::string&)>, std::vector<std::string>, std::string_view) {}
     std::unique_ptr<ProgressCallback> CreateHostProgressCallback() { return nullptr; }
     void OnAchievementsLoginSuccess(char const*, u32, u32, u32) { ARMSX2_PostRetroAchievementsStateChanged(); }
-    void OnPerformanceMetricsUpdated()
-    {
-        if (!ARMSX2IOSRuntimeTelemetryEnabled())
-            return;
-
-        static std::atomic<uint> s_last_metrics_frame{0};
-        const uint frame = ::g_FrameCount;
-        const float fps = PerformanceMetrics::GetFPS();
-        const float internal_fps = PerformanceMetrics::GetInternalFPS();
-        const float speed = PerformanceMetrics::GetSpeed();
-        const float cpu_usage = PerformanceMetrics::GetCPUThreadUsage();
-        const float vu_usage = PerformanceMetrics::GetVUThreadUsage();
-        const float gs_usage = PerformanceMetrics::GetGSThreadUsage();
-        const float gpu_usage = PerformanceMetrics::GetGPUUsage();
-        const bool hot_sample =
-            (frame > 300 && fps < 58.0f) ||
-            cpu_usage >= 85.0f ||
-            vu_usage >= 35.0f ||
-            gs_usage >= 25.0f ||
-            gpu_usage >= 25.0f;
-        const uint min_frame_delta = hot_sample ? 60 : 300;
-        uint last = s_last_metrics_frame.load(std::memory_order_relaxed);
-        if (last != 0 && frame < last + min_frame_delta)
-            return;
-        if (!s_last_metrics_frame.compare_exchange_strong(last, frame, std::memory_order_relaxed))
-            return;
-
-        std::fprintf(stderr,
-            "@@PERF@@ frame=%u pm_frame=%llu fps=%.2f internal_fps=%.2f speed=%.2f cpu=%.2f vu=%.2f gs=%.2f gpu=%.2f state=%d\n",
-            frame,
-            static_cast<unsigned long long>(PerformanceMetrics::GetFrameNumber()),
-            fps,
-            internal_fps,
-            speed,
-            cpu_usage,
-            vu_usage,
-            gs_usage,
-            gpu_usage,
-            static_cast<int>(VMManager::GetState()));
-    }
+    void OnPerformanceMetricsUpdated() {}
     void OnAchievementsLoginRequested(Achievements::LoginRequestReason) { ARMSX2_PostRetroAchievementsStateChanged(); }
     bool ShouldPreferHostFileSelector() { return false; }
     void OnCoverDownloaderOpenRequested() {}
@@ -508,11 +466,7 @@ public:
             configuration.URLCache = nil;
             configuration.HTTPShouldSetCookies = NO;
             NSURLSession* session = [NSURLSession sessionWithConfiguration:configuration];
-#if __has_feature(objc_arc)
             m_session = (__bridge_retained void*)session;
-#else
-            m_session = (void*)[session retain];
-#endif
         }
     }
 
@@ -520,16 +474,9 @@ public:
     {
         if (m_session)
         {
-#if __has_feature(objc_arc)
             NSURLSession* session = (__bridge_transfer NSURLSession*)m_session;
-#else
-            NSURLSession* session = (NSURLSession*)m_session;
-#endif
             m_session = nullptr;
             [session invalidateAndCancel];
-#if !__has_feature(objc_arc)
-            [session release];
-#endif
         }
     }
 
@@ -543,13 +490,6 @@ protected:
         u32 completed_content_length = 0;
         std::string completed_content_type;
         Request::Data completed_data;
-
-#if !__has_feature(objc_arc)
-        ~IOSRequest()
-        {
-            [task release];
-        }
-#endif
     };
 
     Request* InternalCreateRequest() override
@@ -610,11 +550,7 @@ protected:
             }
 
             NSString* debug_url = url.host ?: @"";
-#if __has_feature(objc_arc)
             NSURLSession* session = (__bridge NSURLSession*)m_session;
-#else
-            NSURLSession* session = (NSURLSession*)m_session;
-#endif
             if (!session || ![session respondsToSelector:@selector(dataTaskWithRequest:completionHandler:)])
             {
                 request->status_code = HTTP_STATUS_ERROR;
@@ -674,11 +610,7 @@ protected:
                     }
                 }];
 
-#if __has_feature(objc_arc)
             native_request->task = task;
-#else
-            native_request->task = [task retain];
-#endif
             [native_request->task resume];
         }
 
@@ -699,9 +631,6 @@ protected:
         // NSURLSession can still deliver a completion after cancellation. Keep the tiny
         // request object alive in that rare timeout/cancel path to avoid a use-after-free.
         [native_request->task cancel];
-#if !__has_feature(objc_arc)
-        [native_request->task release];
-#endif
         native_request->task = nil;
     }
 
@@ -737,7 +666,7 @@ namespace CocoaTools {
     // macOS-only). Return types aren't mangled, so a mismatch still links and
     // callers read garbage off the stack.
     std::optional<std::string> GetBundlePath() { return std::string([[NSBundle mainBundle].bundlePath UTF8String]); }
-    
+
     bool CreateMetalLayer(WindowInfo* wi) {
         if (!Host::g_sdl_window) return false;
 

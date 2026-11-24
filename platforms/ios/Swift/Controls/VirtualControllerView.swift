@@ -10,7 +10,7 @@ let gameplaySurfaceTapNotification = Notification.Name("ARMSX2iOSGameplaySurface
 
 struct VirtualControllerView: View {
     @State private var settings = SettingsStore.shared
-    @State private var dynamicSettings = DynamicThumbstickSettings.shared
+    @State private var dynamicSettings = SettingsStore.shared.dynamicThumbsticks
     @State private var skinLibrary = VPadSkinLibraryStore.shared
     @State private var layout = PadLayoutStore.shared
     @State private var swipeInput = SwipeCameraInputDriver()
@@ -33,7 +33,7 @@ struct VirtualControllerView: View {
     }
 
     private var analogStickScale: CGFloat {
-        CGFloat(SettingsStore.clampedAnalogStickScale(settings.analogStickScale))
+        CGFloat(SettingsStore.clampedAnalogStickScale(settings.controller.analogStickScale))
     }
 
     private var effectiveSkinDescriptor: VPadSkinDescriptor {
@@ -84,7 +84,7 @@ struct VirtualControllerView: View {
                             landscapeLayout(w: geo.size.width, h: geo.size.height)
                         }
                     }
-                    .environment(\.padOpacity, Double(settings.padOpacity))
+                    .environment(\.padOpacity, Double(settings.controller.padOpacity))
                     .environment(\.padSkin, skin)
                     .environment(\.padSkinDescriptor, descriptor)
                     .environment(\.padUsesFullSkin, usesFullSkin)
@@ -96,7 +96,7 @@ struct VirtualControllerView: View {
                             portraitLayout(w: geo.size.width, h: geo.size.height)
                         }
                     }
-                    .environment(\.padOpacity, Double(settings.padOpacity))
+                    .environment(\.padOpacity, Double(settings.controller.padOpacity))
                     .environment(\.padSkin, skin)
                     .environment(\.padSkinDescriptor, descriptor)
                     .environment(\.padUsesFullSkin, usesFullSkin)
@@ -147,7 +147,7 @@ struct VirtualControllerView: View {
         }
         .onReceive(
             NotificationCenter.default.publisher(
-                for: Notification.Name("ARMSX2RetroAchievementsStateChanged")
+                for: .ARMSX2RetroAchievementsStateChanged
             )
         ) { _ in
             activeTouchActionSession.refreshHardcoreAutomaticFireRestriction()
@@ -204,9 +204,8 @@ struct VirtualControllerView: View {
             .position(x: p.x * areaW, y: p.y * areaH)
     }
 
-    // Composite 8-way D-pad used when D-pad diagonals are enabled. Derives the
-    // capture circle and center deadzone from the four cardinal button positions
-    // so it follows custom layouts, per-orientation sizing, and hit scaling.
+    // 8-way D-pad for diagonals. Its capture circle and deadzone come from the four
+    // cardinal buttons, so it follows custom layouts, per-orientation sizing and hit scaling.
     private func placedCompositeDPad(landscape: Bool, areaW: CGFloat, areaH: CGFloat) -> some View {
         let entries: [(id: String, button: ARMSX2PadButton, label: String)] = [
             ("up", .up, "▲"), ("down", .down, "▼"), ("left", .left, "◀"), ("right", .right, "▶")
@@ -526,7 +525,7 @@ struct VirtualControllerView: View {
             dynamicInputZones(w: w, h: h)
 
             if isVisible("dpad") {
-                if settings.dpadDiagonalsEnabled {
+                if settings.controller.dpadDiagonalsEnabled {
                     placedCompositeDPad(landscape: true, areaW: w, areaH: h)
                 } else {
                     let dpadW = VirtualPadButtonOffset.dpadButtonWidth(isLandscape: true)
@@ -537,9 +536,8 @@ struct VirtualControllerView: View {
                 }
             }
 
-            // Action buttons: composite combo surface when enabled (and all four face
-            // buttons are visible); otherwise individual buttons with per-button visibility.
-            if settings.faceComboZonesEnabled,
+            // The combo surface needs all four face buttons visible; otherwise each button stands alone.
+            if settings.controller.faceComboZonesEnabled,
                isVisible("triangle") && isVisible("cross") && isVisible("square") && isVisible("circle") {
                 placedCompositeFaceButtons(landscape: true, areaW: w, areaH: h)
             } else {
@@ -626,7 +624,7 @@ struct VirtualControllerView: View {
                 }
 
                 if isVisible("dpad") {
-                    if settings.dpadDiagonalsEnabled {
+                    if settings.controller.dpadDiagonalsEnabled {
                         placedCompositeDPad(landscape: false, areaW: cW, areaH: cH)
                     } else {
                         let dpadW = VirtualPadButtonOffset.dpadButtonWidth(isLandscape: false)
@@ -637,9 +635,8 @@ struct VirtualControllerView: View {
                     }
                 }
 
-                // Action buttons: composite combo surface when enabled (and all four face
-                // buttons are visible); otherwise individual buttons with per-button visibility.
-                if settings.faceComboZonesEnabled,
+                // The combo surface needs all four face buttons visible; otherwise each button stands alone.
+                if settings.controller.faceComboZonesEnabled,
                    isVisible("triangle") && isVisible("cross") && isVisible("square") && isVisible("circle") {
                     placedCompositeFaceButtons(landscape: false, areaW: cW, areaH: cH)
                 } else {

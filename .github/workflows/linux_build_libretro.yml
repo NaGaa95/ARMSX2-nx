@@ -103,9 +103,6 @@ jobs:
         run: |
           # The libretro core is a position-independent shared object driven by
           # the frontend's Vulkan context — no Qt, no SDL, no X11/Wayland WSI.
-          # OVERRIDE_HOST_PAGE_SIZE=4096 is a first-cut default matching the
-          # common Android/handheld RetroArch target; revisit for 16K-page
-          # devices.
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
@@ -128,7 +125,6 @@ jobs:
             -DX11_API=OFF \
             -DWAYLAND_API=OFF \
             -DDISABLE_ADVANCE_SIMD=TRUE \
-            -DOVERRIDE_HOST_PAGE_SIZE=4096 \
             -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
 
       - name: Build armsx2_libretro
@@ -138,6 +134,13 @@ jobs:
           ccache -z
           ninja pcsx2-libretro
           ccache -s
+
+      # Before packaging strips the symbols the check tells the outline-atomics helpers apart by.
+      - name: Verify no inline LSE atomics
+        run: |
+          SO=$(find build -name 'armsx2_libretro.so' | head -1)
+          test -n "$SO" || { echo "armsx2_libretro.so not found"; exit 1; }
+          bash .github/workflows/scripts/linux/check-no-lse.sh "$SO" llvm-objdump-17
 
       - name: Package libretro Core Tarball
         env:

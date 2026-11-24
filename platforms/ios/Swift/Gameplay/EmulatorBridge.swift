@@ -77,8 +77,9 @@ enum StikDebugLauncher {
     }
 }
 
+@MainActor
 @Observable
-final class EmulatorBridge: @unchecked Sendable {
+final class EmulatorBridge {
     static let shared = EmulatorBridge()
 
     @ObservationIgnored private var virtualRightTouchX: Float = 0
@@ -92,9 +93,8 @@ final class EmulatorBridge: @unchecked Sendable {
         ARMSX2Bridge.setPadButton(button, pressed: pressed)
     }
 
-    @MainActor
     func setLeftStick(x: Float, y: Float) {
-        let dynamicSettings = DynamicThumbstickSettings.shared
+        let dynamicSettings = SettingsStore.shared.dynamicThumbsticks
         let sensitivity = Float(dynamicSettings.movementSensitivity)
         let clamped = Self.radiallyClamped(x: x * sensitivity, y: y * sensitivity)
         let output = Self.applyingNegativeDeadzone(
@@ -102,26 +102,23 @@ final class EmulatorBridge: @unchecked Sendable {
             enabled: dynamicSettings.leftInstantDeadzoneEnabled,
             configuredDeadzone: dynamicSettings.leftNegativeDeadzone
         )
-        let inv = SettingsStore.shared.stickInversion(for: .left)
+        let inv = SettingsStore.shared.controller.stickInversion(for: .left)
         ARMSX2Bridge.setLeftStickX(inv.x ? -output.x : output.x, y: inv.y ? -output.y : output.y)
     }
 
-    @MainActor
     func setRightStick(x: Float, y: Float) {
-        let sensitivity = Float(DynamicThumbstickSettings.shared.lookSensitivity)
+        let sensitivity = Float(SettingsStore.shared.dynamicThumbsticks.lookSensitivity)
         virtualRightTouchX = x * sensitivity
         virtualRightTouchY = y * sensitivity
         applyVirtualRightStick()
     }
 
-    @MainActor
     func setRightStickMotion(x: Float, y: Float) {
         virtualRightMotionX = x
         virtualRightMotionY = y
         applyVirtualRightStick()
     }
 
-    @MainActor
     func resetVirtualPadAnalogInput() {
         virtualRightTouchX = 0
         virtualRightTouchY = 0
@@ -131,9 +128,8 @@ final class EmulatorBridge: @unchecked Sendable {
         ARMSX2Bridge.setRightStickX(0, y: 0)
     }
 
-    @MainActor
     private func applyVirtualRightStick() {
-        let dynamicSettings = DynamicThumbstickSettings.shared
+        let dynamicSettings = SettingsStore.shared.dynamicThumbsticks
         let clamped = Self.radiallyClamped(
             x: virtualRightTouchX + virtualRightMotionX,
             y: virtualRightTouchY + virtualRightMotionY
@@ -143,7 +139,7 @@ final class EmulatorBridge: @unchecked Sendable {
             enabled: dynamicSettings.rightInstantDeadzoneEnabled,
             configuredDeadzone: dynamicSettings.rightNegativeDeadzone
         )
-        let inv = SettingsStore.shared.stickInversion(for: .right)
+        let inv = SettingsStore.shared.controller.stickInversion(for: .right)
         ARMSX2Bridge.setRightStickX(inv.x ? -output.x : output.x, y: inv.y ? -output.y : output.y)
     }
 

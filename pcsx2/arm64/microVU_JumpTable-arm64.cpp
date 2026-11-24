@@ -4,6 +4,7 @@
 #include "microVU_JumpTable-arm64.h"
 
 #include "common/Assertions.h"
+#include "common/BitUtils.h"
 #include "common/HostSys.h"
 
 #include <mutex>
@@ -22,11 +23,8 @@ namespace mVUJumpTable
 {
 	namespace
 	{
-		static_assert((kBytes & (__pagesize - 1)) == 0, "a table covers whole pages");
-
 		// Virtual address space only until a table is written.
 		constexpr size_t kTablesPerSlab = 256;
-		constexpr size_t kSlabBytes = kBytes * kTablesPerSlab;
 
 		std::mutex s_mutex;
 		std::vector<void*> s_free;
@@ -35,19 +33,20 @@ namespace mVUJumpTable
 
 		u8* MapSlab()
 		{
+			const size_t slab_bytes = Common::PageAlign(kBytes) * kTablesPerSlab;
 #ifdef _WIN32
-			void* const slab = VirtualAlloc(nullptr, kSlabBytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+			void* const slab = VirtualAlloc(nullptr, slab_bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 #elif defined(__SWITCH__)
 			// (Horizon has no lazily backed anonymous mappings: the slab is ordinary zeroed heap)
-			void* const slab = memalign(__pagesize, kSlabBytes);
+			void* const slab = memalign(__pagesize, slab_bytes);
 			if (slab)
-				std::memset(slab, 0, kSlabBytes);
+				std::memset(slab, 0, slab_bytes);
 #else
-			void* const slab = mmap(nullptr, kSlabBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+			void* const slab = mmap(nullptr, slab_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
 #if defined(__linux__) && defined(MADV_NOHUGEPAGE)
 			// (a huge page would make one written entry cost 2 MiB)
 			if (slab != MAP_FAILED)
-				madvise(slab, kSlabBytes, MADV_NOHUGEPAGE);
+				madvise(slab, slab_bytes, MADV_NOHUGEPAGE);
 #endif
 			pxAssertRel(slab != MAP_FAILED, "Out of address space for microVU's jump tables.");
 #endif
@@ -70,14 +69,14 @@ namespace mVUJumpTable
 			s_slab = MapSlab();
 			s_slabUsed = 0;
 		}
-		return s_slab + kBytes * s_slabUsed++;
+		return s_slab + Common::PageAlign(kBytes) * s_slabUsed++;
 	}
 
 	void Free(void* table)
 	{
 		if (!table)
 			return;
-		HostSys::DiscardMemory(table, kBytes);
+		HostSys::DiscardMemory(table, Common::PageAlign(kBytes));
 		std::lock_guard<std::mutex> lock(s_mutex);
 		s_free.push_back(table);
 	}

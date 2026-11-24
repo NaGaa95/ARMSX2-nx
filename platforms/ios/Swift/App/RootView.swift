@@ -147,11 +147,9 @@ struct RootView: View {
 
     private var baseContent: some View {
         ZStack {
-            // Menu backdrop, and only that. It used to live inside the menu branch of a
-            // switch; once this became a ZStack it started painting over gameplay too,
-            // where it is near white in light mode and shows in the strip of top safe
-            // area the portrait game view leaves clear for the Dynamic Island. Same
-            // condition as the layer below so the two cannot drift apart.
+            // Menu backdrop only: over gameplay it shows near white in the top safe area
+            // portrait leaves for the Dynamic Island. Same condition as the layer below so
+            // the two cannot drift apart.
             Color(uiColor: .systemGroupedBackground)
                 .ignoresSafeArea()
                 .opacity(
@@ -254,7 +252,7 @@ struct RootView: View {
                 ZStack {
                     Color.black.ignoresSafeArea()
                     ProgressView(settings.localized("Starting Last Game…"))
-                        .tint(settings.controllerNavigationAccentColor)
+                        .tint(settings.appearance.controllerNavigationAccentColor)
                 }
                 .zIndex(100)
             }
@@ -266,7 +264,7 @@ struct RootView: View {
         }
         .environment(\.locale, settings.appLanguage == .system ? .autoupdatingCurrent : Locale(identifier: settings.appLanguage.bcp47Code))
         .environment(\.layoutDirection, settings.localizedLayoutDirection)
-        .environment(\.clearLiquidGlassUIEnabled, settings.clearLiquidGlassUI)
+        .environment(\.clearLiquidGlassUIEnabled, settings.appearance.clearLiquidGlassUI)
         .environment(\.menuControllerInputRouter, menuControllerInput)
 #if !targetEnvironment(macCatalyst)
         .background {
@@ -308,8 +306,8 @@ struct RootView: View {
 #endif
         .statusBarHidden(
             showBootSplash
-                ? settings.hideIntroStatusBar
-                : (menuScreenActive && settings.hideMenuStatusBar)
+                ? settings.appearance.hideIntroStatusBar
+                : (menuScreenActive && settings.appearance.hideMenuStatusBar)
         )
     }
 
@@ -329,10 +327,8 @@ struct RootView: View {
             rootControllerAlertSelection = 0
             updateRootAlertNavigationCapture(isPresented: kind != nil)
             guard let kind, kind != previous else { return }
-            // Presentation sound belongs to the modal transition, not to a
-            // hidden row underneath it. File/import handlers already emit the
-            // toast sound in most paths; the audio coalescer makes this safe for
-            // the remaining direct BIOS-disclaimer path.
+            // The sound belongs to the modal transition, not a hidden row under it.
+            // Import handlers often play the toast too; the audio coalescer drops repeats.
             switch kind {
             case .fileImport, .bios, .restartVM, .libraryExport:
                 MenuAudioPackManager.shared.playEvent(.uiToast)
@@ -376,7 +372,7 @@ struct RootView: View {
             guard !Task.isCancelled,
                   !showBootSplash,
                   appState.currentScreen == .menu else { return }
-            appState.hideStatusBar = settings.hideMenuStatusBar
+            appState.hideStatusBar = settings.appearance.hideMenuStatusBar
         }
         scheduleGameplayControllerHelpIfReady()
 
@@ -451,7 +447,7 @@ struct RootView: View {
             return
         }
         if !showBootSplash {
-            appState.hideStatusBar = settings.hideMenuStatusBar
+            appState.hideStatusBar = settings.appearance.hideMenuStatusBar
         }
         gameplayHelpBanner.clear()
         updateRootAlertNavigationCapture(
@@ -782,6 +778,6 @@ struct RootView: View {
 
     private func presentNoJITWarningEffects() {
         MenuAudioPackManager.shared.playEvent(.noJIT)
-        settings.applyAutomaticNoJITAppearanceIfEligible()
+        settings.appearance.applyAutomaticNoJITAppearanceIfEligible()
     }
 }

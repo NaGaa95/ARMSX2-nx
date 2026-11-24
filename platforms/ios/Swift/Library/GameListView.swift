@@ -26,11 +26,11 @@ struct GameListView: View {
     }
 
     @State private var appState = AppState.shared
-	@State private var settings = SettingsStore.shared
-	@State private var logoStore = ARMSX2LogoStore.shared
-	@State private var fileImporter = FileImportHandler.shared
-	@State private var coverStore = CoverStore.shared
-	@State private var externalLibrary = ExternalGameLibrary.shared
+    @State private var settings = SettingsStore.shared
+    @State private var logoStore = ARMSX2LogoStore.shared
+    @State private var fileImporter = FileImportHandler.shared
+    @State private var coverStore = CoverStore.shared
+    @State private var externalLibrary = ExternalGameLibrary.shared
     @Environment(\.menuTabIsActive) private var menuTabIsActive
     // controllerInput is nil under touch; this shared one only arbitrates the L2/R2 backdrop gesture.
     @Environment(\.menuControllerInputRouter)
@@ -48,9 +48,9 @@ struct GameListView: View {
     @State private var controller = GameLibraryControllerCoordinator()
     // SettingsStore owns background configuration; the shared container renders it.
     private var hasCustomBackground: Bool {
-        settings.dynamicBackgroundsEnabled
-            || settings.backgroundPrimaryAsset != nil
-            || settings.backgroundLandscapeAsset != nil
+        settings.appearance.dynamicBackgroundsEnabled
+            || settings.appearance.backgroundPrimaryAsset != nil
+            || settings.appearance.backgroundLandscapeAsset != nil
     }
 
     private var hideGamesScreenTitle: Bool {
@@ -106,9 +106,9 @@ struct GameListView: View {
     }
 
     private var cardStyle: GameLibraryCardStyle {
-        let paletteColors = settings.controllerFocusBoxCustomColor.map {
+        let paletteColors = settings.appearance.controllerFocusBoxCustomColor.map {
             [$0.color]
-        } ?? settings.controllerFocusBoxPalette.colors
+        } ?? settings.appearance.controllerFocusBoxPalette.colors
         let primaryGlow = paletteColors.first ?? accentColour
         return GameLibraryCardStyle(
             resolvedGameCardScale: controller.resolvedGameCardScale,
@@ -138,8 +138,8 @@ struct GameListView: View {
             regionLabel: settings.localized("Region"),
             addToFavoritesLabel: settings.localized("Add to favorites"),
             removeFromFavoritesLabel: settings.localized("Remove from favorites"),
-            cardFocusedColor: settings.controllerCardFocusedColor,
-            favoriteGlowEnabled: settings.favoriteGlowingEffectEnabled,
+            cardFocusedColor: settings.appearance.controllerCardFocusedColor,
+            favoriteGlowEnabled: settings.appearance.favoriteGlowingEffectEnabled,
             glowPrimaryColor: primaryGlow,
             glowSecondaryColor: paletteColors.dropFirst().first ?? primaryGlow
         )
@@ -275,10 +275,10 @@ struct GameListView: View {
                 if controller.controllerMoreMenuPresented {
                     ControllerNavigationAlert(
                         title: settings.localized("More"),
-                        titleColour: settings.controllerContextMenuColor,
-                        contentColour: settings.controllerContextMenuColor,
+                        titleColour: settings.appearance.controllerContextMenuColor,
+                        contentColour: settings.appearance.controllerContextMenuColor,
                         secondaryContentColour:
-                            settings.controllerContextMenuSecondaryColor,
+                            settings.appearance.controllerContextMenuSecondaryColor,
                         usesClearGlass: false,
                         showsActionButtonBackgrounds: true,
                         dimsBackground: false,
@@ -400,11 +400,11 @@ struct GameListView: View {
             } message: {
                 Text("Use ${serial}, ${title}, or ${filetitle}. Default: \(CoverStore.defaultCoverURLTemplate)")
             }
-				.sheet(isPresented: $controller.showGameImporter) {
-					ImportDocumentPicker(
-						allowsMultipleSelection: true,
-						legacyDocumentTypes: ["public.item", "public.data", "public.content"]
-	                ) { result in
+                .sheet(isPresented: $controller.showGameImporter) {
+                    ImportDocumentPicker(
+                        allowedContentTypes: [.item, .data, .content],
+                        allowsMultipleSelection: true
+                    ) { result in
                     controller.showGameImporter = false
                     switch result {
                     case .success(let urls):
@@ -413,12 +413,12 @@ struct GameListView: View {
                         if !FileImportHandler.isUserCancelledPickerError(error) {
                             fileImporter.presentImportResult(FileImportHandler.failedGamePickerMessage(errorDescription: error.localizedDescription))
                         }
-					}
-				}
-			}
-			.sheet(isPresented: $controller.showCoverImporter) {
-				ImportDocumentPicker(
-					allowedContentTypes: CoverStore.coverContentTypes,
+                    }
+                }
+            }
+            .sheet(isPresented: $controller.showCoverImporter) {
+                ImportDocumentPicker(
+                    allowedContentTypes: CoverStore.coverContentTypes,
                     allowsMultipleSelection: controller.pendingCoverGameName == nil
                 ) { result in
                     controller.showCoverImporter = false
@@ -586,7 +586,7 @@ struct GameListView: View {
                 .presentationBackground(.clear)
                 .appStatusBarHidden()
             }
-			}
+            }
         let contextObservers = presentation
         .onChange(of: controllerInput.map(ObjectIdentifier.init), initial: true) { pushControllerContext() }
         .onChange(of: menuTabIsActive, initial: true) { pushControllerContext() }
@@ -620,7 +620,7 @@ struct GameListView: View {
             NotificationCenter.default.publisher(for: InitialContentBootstrap.didChangeNotification)
         ) { _ in library.handleInitialContentDidChange() }
         .onReceive(
-            NotificationCenter.default.publisher(for: NSNotification.Name("ARMSX2iOSReturnToMenu"))
+            NotificationCenter.default.publisher(for: .ARMSX2iOSReturnToMenu)
         ) { _ in
             pushControllerContext()
             controller.handleReturnToMenu()

@@ -222,43 +222,40 @@ elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_SYSTEM_PROCESSOR
 			list(APPEND PCSX2_DEFS ARMSX2_FRAME_POINTERS=1)
 		endif()
 	elseif(NOT MSVC)
-		# Require atomic rmw instructions (LSE, ARMv8.1+). This is the upstream
-		# default and targets the broad arm64 ecosystem. MSVC (and clang-cl)
-		# reject -march; their arm64 baseline already includes what we need.
-		# In-order ARMv8.0 cores without LSE (e.g. Cortex-A53 handhelds, RK3562)
-		# must build with -march=armv8-a (+ -moutline-atomics) in CMAKE_CXX_FLAGS
-		# — LSE atomics fault on them. Only apply the v8.1 default when the user
-		# hasn't chosen an -march: add_compile_options lands AFTER CMAKE_CXX_FLAGS
+		# Target the ARMv8.0 baseline so one binary runs on every arm64 core,
+		# including in-order ones without LSE (Cortex-A53 handhelds, RK3562, H700),
+		# where an inline LSE atomic is SIGILL. -moutline-atomics routes atomic
+		# read-modify-writes through the __aarch64_* helpers, which check
+		# HWCAP_ATOMICS once at startup and use LSE on cores that have it, so
+		# ARMv8.1+ hardware keeps LSE under contention. Plain atomic loads and
+		# stores stay inline. The recompilers already emit ARMv8.0 only
+		# (arm64/AsmHelpers.h), and GSBlockId picks CRC32/AES from the HWCAPs.
+		# MSVC (and clang-cl) reject -march; their arm64 baseline already
+		# includes what we need.
+		# Only apply this when the user hasn't chosen an -march (e.g. a build
+		# tuned for one device): add_compile_options lands AFTER CMAKE_CXX_FLAGS
 		# on the compile line, so unconditionally adding it here silently
-		# overrides any user -march (proven by a casal SIGILL on a real A53 device).
+		# overrides any user -march.
 		if(NOT CMAKE_CXX_FLAGS MATCHES "-march=")
-			add_compile_options("-march=armv8.1-a")
+			add_compile_options("-march=armv8-a" "-moutline-atomics")
 		endif()
 	endif()
 
-	# If we're running on Linux, we need to detect the page/cache line size.
-	# It could be a virtual machine with 4K pages, or 16K with Asahi.
+	# Linux ARM64 detects the kernel's page size at runtime, so one binary runs on
+	# 4K, 16K and 64K kernels. The cache line size only pads structures that two
+	# threads write (alignas), and 128 also keeps them apart on 64-byte cores, so
+	# it is fixed rather than taken from the build machine, as on Windows below.
 	if(LINUX)
-		detect_page_size()
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=${HOST_PAGE_SIZE})
-		detect_cache_line_size()
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=${HOST_CACHE_LINE_SIZE})
+		add_link_options("LINKER:-z,max-page-size=65536")
+		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=128)
 	endif()
 
-	# Android is neither LINUX nor WIN32 to CMake, so without this branch it
-	# falls through to the ARM64 default in Pcsx2Defs.h — 16K pages — while
-	# every current Android device runs a 4K kernel. The ARM64 memory manager
-	# needs its compile-time page size to match the kernel's at runtime, and a
-	# mismatch is a hard failure on the device, not a build warning. Detection
-	# is not an option here (cross-compile), so it is a knob, defaulted to 4K
-	# and named the same as in the APK's own copy of this file.
+	# Android is neither LINUX nor WIN32 to CMake. Like Linux, it reads the host
+	# page size at load time (Pcsx2Defs.h), so one core runs on 4K and 16K
+	# kernels. The segments are aligned to 16K so the library loads on a 16K
+	# kernel at all.
 	if(ANDROID)
-		set(ARMSX2_ANDROID_HOST_PAGE_SIZE "0x1000" CACHE STRING "Compile-time Android host page size for the PCSX2 core")
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=${ARMSX2_ANDROID_HOST_PAGE_SIZE})
 		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=64)
-		# 16K-page compatibility for the ELF itself: a 4K-internal-page build
-		# still has to load on a 16K kernel, which requires the segments be
-		# aligned to 16K. Independent of the page size above.
 		add_link_options(
 			"LINKER:-z,max-page-size=16384"
 			"LINKER:-z,common-page-size=16384"

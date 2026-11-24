@@ -31,6 +31,7 @@
 #include "arm64/RecCrashReport-arm64.h"
 #include "arm64/RecErrorReport-arm64.h"
 #include "R5900OpcodeTables.h"
+#include "R5900IssueModel.h"
 #include "Common.h"
 #include "VMManager.h"
 #include "Patch.h"
@@ -67,6 +68,96 @@ int g_branch;
 u32 target;
 u32 s_nBlockCycles;
 bool s_nBlockInterlocked;
+
+// The issue model's state for the path being compiled (R5900IssueModel.h).
+// Each instruction adds what it costs the path to s_nBlockCycles as it is
+// compiled; each exit adds its constant. The interpreter runs the same model as
+// it executes, so the two charge a path the same.
+static R5900::Issue::State s_eeIssue;
+// The current flow's exit has been charged: SetBranchImm and its kin are
+// reached from one another, and charge it once.
+static bool s_eeIssueExitCharged = false;
+
+// Eighths of a cycle per model cycle: one cycle, two with dual issue off.
+static u32 recEeIssueEighths()
+{
+	return 8 * (2 - ((cpuRegs.CP0.n.Config >> 18) & 0x1));
+}
+
+// The flow leaving toward `target` charges its path's exit: taken, not taken,
+// a branch-likely not taken, or a register jump, from the branch the path
+// holds.
+static void recEeIssueChargeExit(u32 target)
+{
+	if (s_eeIssueExitCharged)
+		return;
+	s_eeIssueExitCharged = true;
+	s_nBlockCycles += R5900::Issue::EndCost(s_eeIssue, R5900::Issue::ExitFor(s_eeIssue, target)) * recEeIssueEighths();
+}
+
+// The block ends at `next_pc` without a branch: a page edge, an existing block
+// or a loop head at next_pc, a forced event test. The next block starts a new
+// path at next_pc, as a branch to it would. Entered by falling through from
+// here, the path really goes on, so this block charges the difference: the
+// rest of the path (to its next delay slot, page edge or instruction that ends
+// a path) costed as a continuation of this one, less what the blocks after it
+// charge for it from a fresh start. The interpreter runs the path as one and
+// charges the same. (A page edge ends the path in both engines; then the
+// difference is only what a divide still running is owed.)
+static void recEeIssueChargeCut(u32 next_pc)
+{
+	using namespace R5900::Issue;
+	if (s_eeIssueExitCharged)
+		return;
+	s_eeIssueExitCharged = true;
+	if (s_eeIssue.steps == 0)
+		return;
+	if (s_eeIssue.complete)
+	{
+		// The path ended at a not-taken branch's delay slot.
+		s_nBlockCycles += EndCost(s_eeIssue, ExitFor(s_eeIssue, next_pc)) * recEeIssueEighths();
+		return;
+	}
+	State carried = s_eeIssue;
+	State fresh;
+	Reset(fresh);
+	s32 diff = 0;
+	for (u32 p = next_pc, n = 0; n < 1024; p += 4, n++)
+	{
+		// A page edge ends the path in both engines. (A delay slot across it is
+		// not followed: the next page may not be mapped at compile time.)
+		if (carried.complete || (p & 0xFFF) == 0)
+			break;
+		const u32 code = memRead32(p);
+		diff += static_cast<s32>(Step(carried, p, code)) - static_cast<s32>(Step(fresh, p, code));
+		if (EndsPath(code))
+			break;
+	}
+	diff += static_cast<s32>(EndCost(carried, ExitFor(carried, 0))) - static_cast<s32>(EndCost(fresh, ExitFor(fresh, 0)));
+	const s32 eighths = diff * static_cast<s32>(recEeIssueEighths());
+	// A continuation can be one cycle cheaper than a fresh start (its first
+	// instruction joins the last cycle here). Never below zero.
+	if (eighths < 0 && static_cast<u32>(-eighths) > s_nBlockCycles)
+		s_nBlockCycles = 0;
+	else
+		s_nBlockCycles = static_cast<u32>(static_cast<s32>(s_nBlockCycles) + eighths);
+}
+
+// The instruction just compiled by recBranchCall ends the block and the path:
+// SYSCALL, BREAK, a trap, ERET or EI (R5900::Issue::EndsPath), or a branch run
+// by the interpreter, whose delay slot it runs too.
+static void recEeIssueChargeCall()
+{
+	if (s_eeIssueExitCharged)
+		return;
+	s_eeIssueExitCharged = true;
+	s_nBlockCycles += R5900::Issue::EndCost(s_eeIssue, R5900::Issue::Exit::None) * recEeIssueEighths();
+}
+
+void recEeIssueForkRestored()
+{
+	s_eeIssueExitCharged = false;
+}
 
 bool g_recompilingDelaySlot = false;
 bool g_cpuFlushedPC = false;
@@ -839,6 +930,7 @@ void recBranchCall(void (*func)())
 	// before the C call — the interpreter's intEventTest reads
 	// cpuRegs.cycle. Re-derive after, so the g_branch=2 exit code that
 	// follows can keep using RECCYCLE.
+	recEeIssueChargeCall();
 	u32 cycles = scaleblockcycles_clear(EeChargeForm::AddImm12);
 	if (cycles > 0)
 		armAsm->Add(RECCYCLE, RECCYCLE, cycles);
@@ -873,6 +965,7 @@ void recBranchCallNoGprWrite(void (*func)(), u32 gpr_reads)
 	iFlushCall(FLUSH_INTERPRETER | FLUSH_KEEP_PINS);
 	pc = saved_pc;
 
+	recEeIssueChargeCall();
 	u32 cycles = scaleblockcycles_clear(EeChargeForm::AddImm12);
 	if (cycles > 0)
 		armAsm->Add(RECCYCLE, RECCYCLE, cycles);
@@ -1108,6 +1201,11 @@ static u32 eeEncodeChargeWord(u32 word, EeChargeForm form, u32 charge)
 	return word;
 }
 
+#ifdef PCSX2_RECOMPILER_TESTS
+// The fraction of a cycle the charge-scaling test hook carries, in 1/8192.
+static u64 s_eeTestChargeAcc = 0;
+#endif
+
 u32 scaleblockcycles_clear(EeChargeForm form)
 {
 	s_eeChargeSites++;
@@ -1121,6 +1219,30 @@ u32 scaleblockcycles_clear(EeChargeForm form)
 	s_eeChargePendingUnpatchable = eeClassifyChargeForm(form);
 	s_eeChargePendingCharge = scaleblockcycles_clear_impl();
 	s_eeChargePending = true;
+
+#ifdef PCSX2_RECOMPILER_TESTS
+	// Test hook: every charge scaled by (1024 + extra) / 1024, the fraction
+	// carried at run time from one charge to the next, as the interpreter
+	// carries it. Emitted ahead of the site's own instruction, which stays the
+	// last one written.
+	if (const u32 extra = R5900::Issue::g_testExtraPer1024)
+	{
+		// x16 and x17 may hold anything here; they are saved around it.
+		const u32 consumed = s_eeChargePendingRaw - s_nBlockCycles;
+		const a64::Register addr = a64::x16;
+		const a64::Register acc = a64::x17;
+		armAsm->Stp(addr, acc, a64::MemOperand(a64::sp, -16, a64::PreIndex));
+		armAsm->Mov(addr, reinterpret_cast<uintptr_t>(&s_eeTestChargeAcc));
+		armAsm->Ldr(acc, a64::MemOperand(addr));
+		armAsm->Mov(addr, static_cast<u64>(consumed) * extra);
+		armAsm->Add(acc, acc, addr);
+		armAsm->Add(RECCYCLE, RECCYCLE, a64::Operand(acc, a64::LSR, 13));
+		armAsm->And(acc, acc, 0x1FFF);
+		armAsm->Mov(addr, reinterpret_cast<uintptr_t>(&s_eeTestChargeAcc));
+		armAsm->Str(acc, a64::MemOperand(addr));
+		armAsm->Ldp(addr, acc, a64::MemOperand(a64::sp, 16, a64::PostIndex));
+	}
+#endif
 
 	// The scaler floors at 1, so every caller below emits its charge
 	// instruction — the `if (cycles != 0) ... else Cmp` arms are dead. The
@@ -1695,6 +1817,7 @@ static void emitCycleUpdateAndEventCheck()
 
 void SetBranchReg(EEBranchRegMode mode, u32 call_return_pc, int wbreg, u32 jump_pc, u32 jump_rs)
 {
+	recEeIssueChargeExit(0);
 	const Cop2VfCacheScope vfCacheScope; // fork tail: preserve compile-time cache state
 	g_branch = 1;
 
@@ -2006,6 +2129,7 @@ static void emitNoteFastForward(u8 kind)
 
 void SetBranchImm(u32 imm)
 {
+	recEeIssueChargeExit(imm);
 	if (s_loopResident && !s_loopBackedgeEmitted && imm == s_loopTopPc)
 	{
 		SetBranchBackedge();
@@ -2068,6 +2192,7 @@ void SetBranchImm(u32 imm)
 // return PC. See the call-ret ring comment block above SetBranchReg.
 void SetBranchImmCall(u32 imm, u32 return_pc)
 {
+	recEeIssueChargeExit(imm);
 	// A WaitLoop-FF-shaped block wants the fast-forward path, and a
 	// self-spinning JAL never returns anyway — keep the plain tail.
 	if (EmuConfig.Speedhacks.WaitLoop && s_nBlockFF && imm == s_branchTo)
@@ -2134,9 +2259,13 @@ struct BranchCompileState
 	EEINST* instInfo;
 	Cop2VfCacheState vfCache;
 	bool clampConstsValid; // SL-13: q25/q26 broadcast validity at the fork point
+	R5900::Issue::State issue;
+	bool issueExitCharged;
 
 	void capture()
 	{
+		issue = s_eeIssue;
+		issueExitCharged = s_eeIssueExitCharged;
 		vfCache = cop2VfCacheGetState();
 		clampConstsValid = cop2ClampConstsValid();
 		blockCycles = s_nBlockCycles;
@@ -2150,6 +2279,8 @@ struct BranchCompileState
 
 	void restore() const
 	{
+		s_eeIssue = issue;
+		s_eeIssueExitCharged = issueExitCharged;
 		cop2VfCacheSetState(vfCache);
 		cop2ClampConstsSetValid(clampConstsValid);
 		s_nBlockCycles = blockCycles;
@@ -2301,6 +2432,7 @@ static void recEmitSideExitIslands()
 // WaitLoop FF), which never apply to a continuation side exit in practice.
 static void recEmitSideExitTail(u32 imm)
 {
+	recEeIssueChargeExit(imm);
 	if ((s_loopResident && !s_loopBackedgeEmitted && imm == s_loopTopPc) ||
 		(EmuConfig.Speedhacks.WaitLoop && s_nBlockFF && imm == s_branchTo))
 	{
@@ -3160,16 +3292,14 @@ void recompileNextInstruction(bool delayslot, bool swapped_delay_slot)
 		armAsm->Str(RWSCRATCH, armCpuRegMem(&cpuRegs.branch));
 	}
 
-	// NOP gets cycle counted but no codegen (matching x86 behavior)
-	if (cpuRegs.code == 0)
+	// Every instruction is charged what it adds to its path under the issue
+	// model, NOP (SLL $0, $0, 0) included, as the interpreter charges it. NOP
+	// emits no code.
+	const R5900::OPCODE& opcode = R5900::GetCurrentInstruction();
+	s_nBlockCycles += R5900::Issue::Step(s_eeIssue, delayslot ? pc : pc - 4, cpuRegs.code) * recEeIssueEighths();
+	s_eeIssueExitCharged = false;
+	if (cpuRegs.code != 0)
 	{
-		s_nBlockCycles += 9 * (2 - ((cpuRegs.CP0.n.Config >> 18) & 0x1));
-	}
-	else
-	{
-		const R5900::OPCODE& opcode = R5900::GetCurrentInstruction();
-		s_nBlockCycles += opcode.cycles * (2 - ((cpuRegs.CP0.n.Config >> 18) & 0x1));
-
 		// Guard: branch/jump in a delay slot would cause infinite
 		// compile-time recursion. Use interpreter for the instruction.
 		const bool isBranchInDelaySlot = delayslot && (opcode.flags & IS_BRANCH);
@@ -3510,8 +3640,8 @@ static void recClear(u32 addr, u32 size)
 	}
 #endif
 
-	int blockidx = recBlocks.LastIndex(end - 4);
-	if (blockidx == -1)
+	auto position = recBlocks.AtOrBefore(end - 4);
+	if (!position)
 		return;
 
 	// No write scope here: the only code writes below are Remove()'s entry
@@ -3539,10 +3669,10 @@ static void recClear(u32 addr, u32 size)
 	u32 upperextent = 0;
 	u32 ceiling = static_cast<u32>(-1);
 
-	if (BASEBLOCKEX* peb_above = recBlocks[blockidx + 1])
+	if (const BASEBLOCKEX* peb_above = recBlocks[recBlocks.Next(position)])
 		ceiling = peb_above->startpc;
 
-	int toRemoveLast = blockidx;
+	auto toRemoveLast = position;
 
 	// Walk down through blocks overlapping [addr, end). For each, reset
 	// BLOCK->fnptr at the block's actual start (the straddle-from-below
@@ -3554,7 +3684,7 @@ static void recClear(u32 addr, u32 size)
 	// compiled, and yanking it mid-emit corrupts the in-progress block.
 	// Splitting the Remove range around it preserves it. Mirrors x86
 	// recClear (pcsx2/x86/ix86-32/iR5900.cpp:786).
-	while (BASEBLOCKEX* pexblock = recBlocks[blockidx])
+	while (const BASEBLOCKEX* pexblock = recBlocks[position])
 	{
 		const u32 blockstart = pexblock->startpc;
 		const u32 blockend = blockstart + pexblock->size * 4;
@@ -3562,9 +3692,10 @@ static void recClear(u32 addr, u32 size)
 
 		if (pblock == s_pCurBlock)
 		{
-			if (toRemoveLast != blockidx)
-				recBlocks.Remove(blockidx + 1, toRemoveLast);
-			toRemoveLast = --blockidx;
+			if (toRemoveLast != position)
+				recBlocks.Remove(recBlocks.Next(position), toRemoveLast);
+			position = recBlocks.Previous(position);
+			toRemoveLast = position;
 			continue;
 		}
 
@@ -3579,9 +3710,10 @@ static void recClear(u32 addr, u32 size)
 			if (blockstart + s_maxBlockBytes <= addr)
 				break;
 
-			if (toRemoveLast != blockidx)
-				recBlocks.Remove(blockidx + 1, toRemoveLast);
-			toRemoveLast = --blockidx;
+			if (toRemoveLast != position)
+				recBlocks.Remove(recBlocks.Next(position), toRemoveLast);
+			position = recBlocks.Previous(position);
+			toRemoveLast = position;
 			continue;
 		}
 
@@ -3589,11 +3721,11 @@ static void recClear(u32 addr, u32 size)
 		upperextent = std::max(upperextent, blockend);
 		pblock->SetFnptr((uptr)JITCompile);
 
-		--blockidx;
+		position = recBlocks.Previous(position);
 	}
 
-	if (toRemoveLast != blockidx)
-		recBlocks.Remove(blockidx + 1, toRemoveLast);
+	if (toRemoveLast != position)
+		recBlocks.Remove(recBlocks.Next(position), toRemoveLast);
 
 	upperextent = std::min(upperextent, ceiling);
 
@@ -3610,7 +3742,10 @@ static void recClear(u32 addr, u32 size)
 	// walk already covers rather than O(live blocks) on every clear.
 	{
 		const u32 floor = (addr > s_maxBlockBytes) ? (addr - s_maxBlockBytes) : 0;
-		for (int i = std::max(0, recBlocks.LastIndex(floor)); BASEBLOCKEX* peb = recBlocks[i]; i++)
+		auto pos = recBlocks.AtOrBefore(floor);
+		if (!pos)
+			pos = recBlocks.Next({});
+		for (; const BASEBLOCKEX* peb = recBlocks[pos]; pos = recBlocks.Next(pos))
 		{
 			if (peb->startpc >= end)
 				break;
@@ -3688,9 +3823,8 @@ static bool memory_protect_recompiled_code(u32 startpc, u32 size)
 			armAsm->Mov(a64::w0, inpage_ptr);
 			armAsm->Mov(a64::w1, inpage_sz / 4);
 
-			// FX-03a fast compare (mirrors the AetherSX2 leak's hoisted-base
-			// wide-compare shape, module 1030, which strides 8 bytes; we take
-			// it to 16): snapshot the source words into the constant pool,
+			// FX-03a fast compare (a hoisted-base wide compare, 16 bytes a
+			// step): snapshot the source words into the constant pool,
 			// hoist both base addresses once, then Ldp 16-byte pairs through
 			// a single Cmp/Ccmp flag chain with ONE exit branch. ~1.3
 			// insns/word vs ~8 for the per-word fallback below. Post-index
@@ -4254,7 +4388,7 @@ bool recEeRepatchCycleCharges(s8 new_selector)
 	// LUT entry so the next dispatch recompiles at the new rate, and stamp the
 	// redirect stub over the entry so a link site still branching straight into
 	// the old code re-dispatches instead. This is what recClear does, minus the
-	// array erase, which is O(live blocks) per block.
+	// metadata erase.
 	//
 	// After the write scopes, not inside them: Arm64BaseBlocks::Remove-style
 	// patching opens its own scope per site, and nesting one inside an open
@@ -4262,15 +4396,13 @@ bool recEeRepatchCycleCharges(s8 new_selector)
 	u32 invalidated = 0;
 	for (const u32 startpc : s_eeDoomedBlocks)
 	{
-		const int idx = recBlocks.Index(startpc);
-		if (idx < 0)
-			continue;
-		const BASEBLOCKEX* b = recBlocks[idx];
+		const auto pos = recBlocks.Index(startpc);
+		const BASEBLOCKEX* b = recBlocks[pos];
 		if (!b || b->startpc != startpc)
 			continue; // the record is stale; its block is already gone
 
 		GETBLOCK(startpc)->SetFnptr((uptr)JITCompile);
-		recBlocks.Invalidate(idx);
+		recBlocks.Invalidate(pos);
 		invalidated++;
 	}
 
@@ -4783,6 +4915,8 @@ static void recRecompile(const u32 startpc)
 
 	s_pCurBlock->SetFnptr(block_fnptr);
 	s_nBlockCycles = 0;
+	R5900::Issue::Reset(s_eeIssue);
+	s_eeIssueExitCharged = false;
 	s_nBlockInterlocked = false;
 	s_eeBlockHasFormChange = false; // per-block, so the block counter counts blocks
 
@@ -5387,9 +5521,8 @@ StartRecomp:
 	// (OverlapWalkIgnoresUnmodifiedNeighbors pins the no-false-positive side).
 	if (HWADDR(pc) <= Ps2MemSize::ExposedRam)
 	{
-		BASEBLOCKEX* oldBlock;
-		int i = recBlocks.LastIndex(HWADDR(pc) - 4);
-		while ((oldBlock = recBlocks[i--]))
+		auto pos = recBlocks.AtOrBefore(HWADDR(pc) - 4);
+		for (; const BASEBLOCKEX* oldBlock = recBlocks[pos]; pos = recBlocks.Previous(pos))
 		{
 			if (oldBlock == s_pCurBlockEx)
 				continue;
@@ -5432,11 +5565,22 @@ StartRecomp:
 	{
 		// Branch taken — flush and dispatch. recBranchCall already accumulated
 		// any pre-call cycles into RECCYCLE and re-derived it after the C
-		// call, so any further scaleblockcycles_clear() result is the
-		// post-call remainder.
+		// call, so what is left is the sub-cycle remainder. The scaler floors
+		// a charge at 1, which here would charge the block a cycle the
+		// interpreter does not, so a remainder under a cycle is not charged.
+		// A block ended by a forced event test (an EE timer read) charges its
+		// cut here; one ended by an interpreter call charged it there.
+		recEeIssueChargeCut(pc);
 		iFlushCall(FLUSH_EVERYTHING);
 
-		emitCycleUpdateAndEventCheck();
+		if (s_nBlockCycles < 8)
+		{
+			s_nBlockCycles = 0;
+			armAsm->Cmp(RECCYCLE, 0);
+			emitDispatcherCondBranch(a64::ge, DispatcherEvent, s_condVeneerEvent);
+		}
+		else
+			emitCycleUpdateAndEventCheck();
 
 		armEmitJmp(DispatcherReg);
 	}
@@ -5461,6 +5605,7 @@ StartRecomp:
 				Console.Error("EE ARM64: Block end mismatch! startpc=0x%08X pc=0x%08X s_nEndBlock=0x%08X", startpc, pc, s_nEndBlock);
 			pxAssert(pc == s_nEndBlock);
 
+			recEeIssueChargeCut(pc);
 			const int numinsts = (pc - startpc) / 4;
 			if (numinsts > 6)
 			{
