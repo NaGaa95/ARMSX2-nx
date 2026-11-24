@@ -108,9 +108,12 @@ bool Initialize()
 		return true;
 
 	usbHsFsSetFileSystemMountFlags(UsbHsFsMountFlags_ReadOnly);
+	// Before usbHsFsInitialize: registered after it, the callback misses a drive already attached at boot.
+	usbHsFsSetPopulateCallback(PopulateCallback, nullptr);
 	const Result result = usbHsFsInitialize(0);
 	if (R_FAILED(result))
 	{
+		usbHsFsSetPopulateCallback(nullptr, nullptr);
 		char message[96];
 		std::snprintf(message, sizeof(message), "USB storage unavailable (0x%08X)", static_cast<unsigned>(result));
 		s_error = message;
@@ -119,7 +122,6 @@ bool Initialize()
 
 	s_initialized = true;
 	s_error.clear();
-	usbHsFsSetPopulateCallback(PopulateCallback, nullptr);
 	RefreshVolumes();
 	return true;
 }

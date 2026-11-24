@@ -45,7 +45,7 @@ target_link_libraries(yadokari PRIVATE
 	-Wl,--end-group
 )
 if(NOT NINTENDO_SWITCH2)
-	target_link_libraries(yadokari PRIVATE usbhsfs)
+	target_link_libraries(yadokari PRIVATE libusbhsfs "${USBHSFS_NTFS_3G}")
 endif()
 
 target_link_options(yadokari PRIVATE -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join)
