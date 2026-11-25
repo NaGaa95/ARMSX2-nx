@@ -555,18 +555,28 @@ static const SettingHelpEntry SETTING_HELP[] = {
   {AUDIO_BACKEND_KEY, "Audio backend",
    "audren plays the sound through the console's audio renderer, which resamples and mixes it on the audio DSP. audout is the older output that the CPU feeds directly; use it if a game has no sound or crackles with audren."},
   {FRAMEGEN_KEY, "Frame generation",
+#ifdef __SWITCH2__
    "Generates one intermediate display frame for each real frame to target a smoother 2x presentation. It does not increase emulation speed and may add artifacts or latency. Available with Vulkan and Drako3D. Open the in-game quick menu with L + R + Plus to turn generated frames on or off. On Vulkan, having it on here costs some GPU time in every game, even with generated frames off."},
+#else
+   "Generates one intermediate display frame for each real frame to target a smoother 2x presentation. It does not increase emulation speed and may add artifacts or latency. Available with Vulkan and Deko3D. Open the in-game quick menu with L + R + Plus to turn generated frames on or off. On Vulkan, having it on here costs some GPU time in every game, even with generated frames off."},
+#endif
   {FRAMEGEN_FLOW_KEY, "Frame generation quality",
+#ifdef __SWITCH2__
    "Sets the resolution used for optical-flow analysis. Quarter resolution uses the least GPU time and memory; Half resolution keeps more motion detail and is the Switch 2 default; Full resolution keeps the most and costs the most."},
+#else
+   "Sets the resolution used for optical-flow analysis. Quarter resolution uses the least GPU time and memory and is the Switch default; Half resolution keeps more motion detail; Full resolution keeps the most and costs the most."},
+#endif
   {FRAMEGEN_PERFORMANCE_KEY, "Frame generation performance",
    "Uses LSFG's lighter performance-oriented processing path. Disable it only when you prefer image quality and have enough GPU headroom."},
+#ifdef __SWITCH2__
   {FRAMEGEN_120HZ_KEY, "Frame generation",
    "Docked, switches the output to 120 Hz (1440p or 1080p, the TV's 120 Hz mode) so that frame generation doubles 50/60 FPS games to 120. It is used only while the game runs at 50/60 FPS. Off, the output stays at the TV's resolution (up to 4K at 60 Hz) and frame generation doubles 30 FPS games only. Handheld always runs at 120 Hz."},
+#endif
   {"EmuCore/GS/Renderer", "Graphics backend",
 #ifdef __SWITCH2__
    "Chooses the core the game runs in. Drako3D renders PS2 GS draws natively on the Switch 2 GPU; Vulkan runs PCSX2's Vulkan renderer on mesa-nx's NVK driver; OpenGL runs PCSX2's OpenGL renderer on mesa-nx's NVC0 driver, or on Zink over NVK. Each renderer's core is its own program, started by the launcher. Frame generation works with Vulkan and Drako3D."},
 #else
-   "Chooses the core the game runs in. Deko3D renders PS2 GS draws natively on the Switch GPU; Vulkan runs PCSX2's Vulkan renderer on mesa-nx's NVK driver; OpenGL runs PCSX2's OpenGL renderer on mesa-nx's NVC0 driver, or on Zink over NVK. Each renderer's core is its own program, started by the launcher."},
+   "Chooses the core the game runs in. Deko3D renders PS2 GS draws natively on the Switch GPU; Vulkan runs PCSX2's Vulkan renderer on mesa-nx's NVK driver; OpenGL runs PCSX2's OpenGL renderer on mesa-nx's NVC0 driver, or on Zink over NVK. Each renderer's core is its own program, started by the launcher. Frame generation works with Vulkan and Deko3D."},
 #endif
   {"EmuCore/GS/upscale_multiplier", "Resolution / performance",
    "Sets the internal resolution used for 3D rendering. Higher scales improve clarity but increase GPU load. Pre-rendered FMV resolution does not change."},
@@ -3815,7 +3825,11 @@ static const char *settingsScreenDescription(int screen) {
     case SCR_RA_ADVANCED:
       return "Notifications, overlays, sounds and special modes of RetroAchievements.";
     case SCR_FRAMEGEN:
+#ifdef __SWITCH2__
       return "Configures LSFG 2x frame generation for Vulkan and Drako3D. It creates intermediate display frames but does not make PS2 emulation run faster. Each game starts with it off: turn it on from the quick menu (L + R + Plus).";
+#else
+      return "Configures LSFG 2x frame generation for Vulkan and Deko3D. It creates intermediate display frames but does not make PS2 emulation run faster. Each game starts with it off: turn it on from the quick menu (L + R + Plus).";
+#endif
     default:
       return "Opens this group of emulator settings.";
   }
@@ -4549,11 +4563,7 @@ static void runSettingsRoot(const char *ctx) {
   const bool global=!(ctx&&*ctx);
   static const int globalOrder[] = { SCR_EMU, SCR_GRAPHICS, SCR_AUDIO, SCR_CONTROLLER, SCR_SYSTEM };
   // (globally, Frame Generation is in the General group)
-#ifdef __SWITCH2__
   static const int gameOrder[] = { SCR_FRAMEGEN, SCR_EMU, SCR_GRAPHICS, SCR_AUDIO, SCR_CONTROLLER, SCR_SYSTEM };
-#else
-  static const int gameOrder[] = { SCR_EMU, SCR_GRAPHICS, SCR_AUDIO, SCR_CONTROLLER, SCR_SYSTEM };
-#endif
   const int *order=global?globalOrder:gameOrder;
   const int nscr=global?(int)std::size(globalOrder):(int)std::size(gameOrder);
   const int launcherRow=0,libraryRow=1,retroAchievementsRow=2,frameGenerationRow=3;
@@ -5782,11 +5792,6 @@ static bool prepareLaunch(const std::string &key,const std::string &pathKey,cons
   expandClampingModes(effective);
   expandClampingModes(overrides);
   storeSet(effective,"Pad1/Type","DualShock2");
-#ifndef __SWITCH2__
-  // (no frame generation on the Switch)
-  storeSet(effective,FRAMEGEN_KEY,"false");
-  storeSet(overrides,FRAMEGEN_KEY,"false");
-#endif
   const auto frameGenerationOn=[&]{
     return !strcmp(storeGet(overrides,FRAMEGEN_KEY,storeGet(effective,FRAMEGEN_KEY,"false")),"true");
   };
@@ -5812,7 +5817,7 @@ static bool prepareLaunch(const std::string &key,const std::string &pathKey,cons
   storeSet(overrides,RENDERER_KEY,renderer.c_str());
   const bool vulkan=renderer=="14";
   const bool opengl=renderer=="12"||renderer=="20";
-  // LSFG 2x runs on Vulkan and Drako3D only.
+  // LSFG 2x runs on Vulkan and Drako3D/Deko3D only.
   if(opengl){
     storeSet(effective,FRAMEGEN_KEY,"false");
     storeSet(overrides,FRAMEGEN_KEY,"false");

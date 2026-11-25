@@ -17,10 +17,12 @@
 #include <atomic>
 #include <cmath>
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 #include "switch/lsfg/SwitchLSFG.h"
 #include "switch/lsfg/SwitchLSFGVulkan.h"
 #include "common/Horizon/Horizon.h"
+#endif
+#ifdef __SWITCH2__
 #include "nx2_platform.h"
 #endif
 
@@ -649,7 +651,7 @@ static const char* PresentModeToString(VkPresentModeKHR mode)
 
 bool VKSwapChain::SelectPresentMode(VkSurfaceKHR surface, GSVSyncMode* vsync_mode, VkPresentModeKHR* present_mode)
 {
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	// LSFG 2x makes its swapchain FIFO (SwitchLSFG_AdjustSwapchainCreateInfo): report it, so that the present throttle
 	// works and SetVSyncMode does not rebuild the swapchain for a mode it cannot get.
 	if (SwitchLSFG_IsPrepared())
@@ -1064,7 +1066,7 @@ bool VKSwapChain::CreateSwapChain()
 		Console.Error("Exclusive fullscreen control requested, but is not supported on this platform.");
 #endif
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	// LSFG 2x: transfer usage and FIFO.
 	const bool lsfg_swap_chain = SwitchLSFG_AdjustSwapchainCreateInfo(swap_chain_info, surface_capabilities);
 	if (lsfg_swap_chain)
@@ -1086,7 +1088,7 @@ bool VKSwapChain::CreateSwapChain()
 	// We can do this immediately since all work should have been completed before calling resize.
 	if (old_swap_chain != VK_NULL_HANDLE)
 	{
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 		SwitchLSFG_DetachSwapchain(old_swap_chain);
 #endif
 		vkDestroySwapchainKHR(GSDeviceVK::GetInstance()->GetDevice(), old_swap_chain, nullptr);
@@ -1110,7 +1112,7 @@ bool VKSwapChain::CreateSwapChain()
 	std::vector<VkImage> images(image_count);
 	res = vkGetSwapchainImagesKHR(GSDeviceVK::GetInstance()->GetDevice(), m_swap_chain, &image_count, images.data());
 	pxAssert(res == VK_SUCCESS);
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	SwitchLSFG_AttachSwapchain(m_swap_chain, {m_image_width, m_image_height}, images.data(), image_count, lsfg_swap_chain);
 #endif
 
@@ -1196,7 +1198,7 @@ void VKSwapChain::DestroySwapChain()
 	if (m_swap_chain == VK_NULL_HANDLE)
 		return;
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	SwitchLSFG_DetachSwapchain(m_swap_chain);
 #endif
 	vkDestroySwapchainKHR(GSDeviceVK::GetInstance()->GetDevice(), m_swap_chain, nullptr);

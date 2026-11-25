@@ -1,11 +1,12 @@
-# lsfg-deko3d (from PPSSPP-nx's ext/lsfg-deko3d): Lossless.dll's shaders to a drako3d shader cache, and the frame
-# generation graph and its scheduling. Copyright 2026 PalindromicBreadLoaf, GPL-2.0-or-later (this file).
+# lsfg-deko3d (from PPSSPP-nx's ext/lsfg-deko3d): Lossless.dll's shaders to a drako3d or deko3d shader cache, and the
+# frame generation graph and its scheduling. Copyright 2026 PalindromicBreadLoaf, GPL-2.0-or-later (this file).
 #
-# Needs: spirv-cross-glsl, uam2rt::uam2rt, and LSFG_UAM_BRIDGE_DIR (the directory of UamBridge.h).
+# Needs: spirv-cross-glsl, LSFG_UAM_LIBRARY (uam2rt::uam2rt on the Switch 2, the uam library of
+# switch/cmake/UamLibrary.cmake on the Switch), LSFG_UAM_COMMIT (the compiler's version) and LSFG_UAM_BRIDGE_DIR (the
+# directory of UamBridge.h).
 
 # The shader cache is keyed by the translator's and the compiler's versions.
 set(LSFG_SPIRV_CROSS_COMMIT "${SPIRV_CROSS_REVISION}")
-set(LSFG_UAM_COMMIT "uam2rt-${uam2rt_VERSION}")
 configure_file(version.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/include/lsfg/common/version.hpp" @ONLY)
 
 add_library(lsfg-deko3d STATIC
@@ -18,4 +19,4 @@ target_include_directories(lsfg-deko3d
 	PRIVATE "${LSFG_UAM_BRIDGE_DIR}")
 set_target_properties(lsfg-deko3d PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 target_compile_options(lsfg-deko3d PRIVATE -fexceptions)
-target_link_libraries(lsfg-deko3d PRIVATE spirv-cross-glsl uam2rt::uam2rt)
+target_link_libraries(lsfg-deko3d PRIVATE spirv-cross-glsl ${LSFG_UAM_LIBRARY})

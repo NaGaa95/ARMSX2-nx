@@ -363,7 +363,7 @@ bool GSDeviceDK::CreateDeviceObjects()
 	DkQueueMaker queue_maker;
 	dkQueueMakerDefaults(&queue_maker, m_device);
 	queue_maker.flags = DkQueueFlags_Graphics | DkQueueFlags_Compute;
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	// LSFG 2x's compute passes need more scratch than the default.
 	SwitchLSFG_Configure(true);
 	if (SwitchLSFG_IsPrepared())
@@ -966,11 +966,13 @@ bool GSDeviceDK::CreateSwapchain()
 {
 	DkImageLayoutMaker layout_maker;
 	dkImageLayoutMakerDefaults(&layout_maker, m_device);
+	// LSFG 2x blits into the swapchain images (the 2D engine).
 #ifdef __SWITCH2__
-	// drako3d swapchain images cannot use hardware compression; LSFG 2x blits into them.
+	// drako3d swapchain images cannot use hardware compression.
 	layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine;
 #else
-	layout_maker.flags = DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_HwCompression;
+	layout_maker.flags =
+		DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine | DkImageFlags_HwCompression;
 #endif
 	layout_maker.format = DkImageFormat_RGBA8_Unorm;
 	layout_maker.dimensions[0] = m_present_width;
@@ -1033,9 +1035,13 @@ void GSDeviceDK::DestroyDeviceObjects()
 {
 #ifdef __SWITCH2__
 	CloseGuestScreen();
+#endif
+#ifdef ARMSX2_NX
 	StopFrameGenerationPreparation();
 	DestroyFrameGeneration();
 	SwitchLSFG_SetStatus(false, false);
+#endif
+#ifdef __SWITCH2__
 	// The launcher starts at the TV's own resolution.
 	if (nx2DisplaySetFrameGeneration(false))
 		nx2DisplayReapply();
@@ -1255,7 +1261,7 @@ GSDevice::PresentResult GSDeviceDK::DoBeginPresent(bool frame_skip)
 	BeginFrameIfNeeded();
 	WaitForCopyEngine();
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	UpdateFrameGeneration();
 	if (m_lsfg_generator)
 	{
@@ -1299,7 +1305,7 @@ void GSDeviceDK::RenderImGui()
 {
 	ImGui::Render();
 	const ImDrawData* draw_data = ImGui::GetDrawData();
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	const bool presenting = m_present_slot >= 0 || m_lsfg_display_used;
 #else
 	const bool presenting = m_present_slot >= 0;
@@ -1426,7 +1432,7 @@ void GSDeviceDK::EndPresent()
 {
 #ifdef __SWITCH__
 	RenderImGui();
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	UpdateFrameGenerationDisplay();
 #endif
 	SubmitFrame();
@@ -1461,7 +1467,7 @@ void GSDeviceDK::SubmitFrame()
 	if (!m_frame_active)
 		return;
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	if (m_lsfg_display_used)
 	{
 		SubmitGeneratedFrame();
@@ -1484,12 +1490,22 @@ void GSDeviceDK::SubmitFrame()
 	m_frame_active = false;
 }
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 namespace
 {
 	u64 MonotonicNs()
 	{
 		return static_cast<u64>(Common::Timer::ConvertValueToNanoseconds(Common::Timer::GetCurrentValue()));
+	}
+
+	// The display's refresh rate: nx2's on the Switch 2 (60 or 120 Hz), 60 Hz on the Switch.
+	int DisplayRefreshRate()
+	{
+#ifdef __SWITCH2__
+		return nx2DisplayRefreshRate();
+#else
+		return 60;
+#endif
 	}
 } // namespace
 
@@ -1551,7 +1567,7 @@ void GSDeviceDK::UpdateFrameGeneration()
 		return;
 	}
 
-	// Lossless.dll's shaders are compiled for drako3d once, then read from the cache.
+	// Lossless.dll's shaders are compiled for drako3d (deko3d on the Switch) once, then read from the cache.
 	if (!m_lsfg_preparing && m_lsfg_shader_directory.empty())
 	{
 		m_lsfg_preparing = true;
@@ -1572,7 +1588,7 @@ void GSDeviceDK::UpdateFrameGeneration()
 	u32 window_width = 0, window_height = 0;
 	const bool resizing = R_SUCCEEDED(nwindowGetDimensions(nwindowGetDefault(), &window_width, &window_height)) &&
 		(static_cast<int>(window_width) != m_present_width || static_cast<int>(window_height) != m_present_height);
-	const bool measuring = state.high_refresh && nx2DisplayRefreshRate() < 120 && !m_lsfg_pacer.LowRateSource();
+	const bool measuring = state.high_refresh && DisplayRefreshRate() < 120 && !m_lsfg_pacer.LowRateSource();
 	if (!m_lsfg_generator && (resizing || measuring))
 	{
 		SwitchLSFG_SetStatus(true, false, m_lsfg_preparing);
@@ -1637,9 +1653,11 @@ void GSDeviceDK::UpdateFrameGenerationDisplay()
 		m_lsfg_high_refresh = true;
 	// Docked with the 120 Hz option, a 50/60 FPS game moves the output to 120 Hz (1440p or 1080p): the new size reaches
 	// ResizeWindow through Host::BeginPresentFrame.
+#ifdef __SWITCH2__
 	if (nx2DisplaySetFrameGeneration(m_lsfg_high_refresh))
 		nx2DisplayReapply();
-	m_lsfg_pacer.SetRefreshRate(nx2DisplayRefreshRate());
+#endif
+	m_lsfg_pacer.SetRefreshRate(DisplayRefreshRate());
 }
 
 bool GSDeviceDK::PresentFrameGenerationImage(const DkImage& image, bool last)
@@ -1655,7 +1673,9 @@ bool GSDeviceDK::PresentFrameGenerationImage(const DkImage& image, bool last)
 	const DkImageRect rect = {0, 0, 0, static_cast<u32>(m_present_width), static_cast<u32>(m_present_height), 1};
 	IssueBarrier(DkBarrier_Full, DkInvalidateFlags_Image);
 	dkCmdBufBlitImage(m_cmdbuf, &source, &rect, &destination, &rect, DkBlitFlag_FilterNearest, 0);
+#ifdef __SWITCH2__
 	m_copy_engine_busy = true;
+#endif
 	if (last)
 		SubmitFrameCommands();
 	else
@@ -1681,10 +1701,12 @@ void GSDeviceDK::SubmitGeneratedFrame()
 		InvalidateHWStateCache();
 	}
 	SwitchLSFG_SetStatus(!m_lsfg_failed, decision.highRate, m_lsfg_preparing);
+#ifdef __SWITCH2__
 	nx2DisplayApply(generated || m_vsync_mode != GSVSyncMode::Disabled ? 1 : 0);
 
 	// (the guest gets the real frame only)
 	const int guest_slot = RecordGuestCopy(m_lsfg_display);
+#endif
 	const u64 present_start = MonotonicNs();
 	bool presented = !generated || PresentFrameGenerationImage(*m_lsfg_generator->GeneratedImage(), false);
 	presented = presented && PresentFrameGenerationImage(m_lsfg_display, true);
@@ -1695,11 +1717,14 @@ void GSDeviceDK::SubmitGeneratedFrame()
 		SubmitFrameCommands();
 		dkQueueFlush(m_queue);
 	}
+#ifdef __SWITCH2__
 	PresentGuestCopy(guest_slot);
+#endif
 	m_present_slot = -1;
 	m_frame_active = false;
 }
 
+#ifdef __SWITCH2__
 bool GSDeviceDK::OpenGuestScreen(void* window)
 {
 	CloseGuestScreen();
@@ -1785,6 +1810,7 @@ void GSDeviceDK::PresentGuestCopy(int slot)
 	if (slot >= 0 && m_guest_swapchain)
 		dkQueuePresentImage(m_queue, m_guest_swapchain, slot);
 }
+#endif
 
 void GSDeviceDK::DestroyFrameGeneration()
 {

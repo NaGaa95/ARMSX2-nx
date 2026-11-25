@@ -516,11 +516,19 @@ inline constexpr Opt S_ra_advanced[] = {
   O_BOOLG("Leaderboard submission sound", "Achievements/LBSubmitSound", "true", "Achievements/SoundEffects", "false"),
 };
 // The same page as the user's other ports (PPSSPP-nx, Cemu-nx, Dolphin-nx, Vita3K-nx).
+// The Switch's flow defaults to quarter resolution, and its display has no 120 Hz.
 inline constexpr Opt S_framegen[] = {
+#ifdef __SWITCH2__
   O_BOOT("LSFG 2x (Vulkan / Drako3D)", FRAMEGEN_KEY, C_bool, "false"),
   O_BOOTG("Flow resolution", FRAMEGEN_FLOW_KEY, C_flow, "0.5", FRAMEGEN_KEY, "false"),
+#else
+  O_BOOT("LSFG 2x (Vulkan / Deko3D)", FRAMEGEN_KEY, C_bool, "false"),
+  O_BOOTG("Flow resolution", FRAMEGEN_FLOW_KEY, C_flow, "0.25", FRAMEGEN_KEY, "false"),
+#endif
   O_BOOTG("Performance mode", FRAMEGEN_PERFORMANCE_KEY, C_bool, "true", FRAMEGEN_KEY, "false"),
+#ifdef __SWITCH2__
   O_BOOTG("120 Hz Docked Mode", FRAMEGEN_120HZ_KEY, C_bool, "false", FRAMEGEN_KEY, "false"),
+#endif
   O_STATUS("Lossless.dll"),
 };
 inline constexpr Opt S_launcher[] = {

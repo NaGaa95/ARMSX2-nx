@@ -1997,8 +1997,9 @@ if(ARMSX2_DK3D AND NINTENDO_SWITCH2)
 	target_include_directories(PCSX2_FLAGS BEFORE INTERFACE "${CMAKE_SOURCE_DIR}/switch/drako3d")
 endif()
 
-if(NINTENDO_SWITCH2)
-	# LSFG 2x frame generation (switch/lsfg): the control here, the third-party parts in their own libraries.
+if(HORIZON)
+	# LSFG 2x frame generation (switch/lsfg), both consoles: the control here, the third-party parts in their own
+	# libraries.
 	target_sources(PCSX2 PRIVATE
 		"${CMAKE_SOURCE_DIR}/switch/lsfg/SwitchLSFG.cpp"
 		"${CMAKE_SOURCE_DIR}/switch/lsfg/SwitchLSFG.h")

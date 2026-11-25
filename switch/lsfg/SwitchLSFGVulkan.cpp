@@ -8,7 +8,9 @@
 #include "common/Console.h"
 
 #include "common/Horizon/Horizon.h"
+#ifdef __SWITCH2__
 #include "nx2_platform.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -187,10 +189,12 @@ void SwitchLSFG_ResetDevice()
 	s_queue_family = VK_QUEUE_FAMILY_IGNORED;
 	s_get_instance_proc_addr = nullptr;
 	s_device_feature_enabled = false;
-	// The launcher starts at the TV's own resolution.
 	s_high_refresh_requested = false;
+#ifdef __SWITCH2__
+	// The launcher starts at the TV's own resolution.
 	if (nx2DisplaySetFrameGeneration(false))
 		nx2DisplayReapply();
+#endif
 }
 
 bool SwitchLSFG_AdjustSwapchainCreateInfo(VkSwapchainCreateInfoKHR& create_info, const VkSurfaceCapabilitiesKHR& capabilities)
@@ -255,8 +259,10 @@ bool SwitchLSFG_Present(VkQueue queue, const VkPresentInfoKHR& present_info, VkR
 		s_high_refresh_requested = false;
 	else if (state.active && SourceIsHighRate())
 		s_high_refresh_requested = true;
+#ifdef __SWITCH2__
 	if (nx2DisplaySetFrameGeneration(s_high_refresh_requested))
 		nx2DisplayReapply();
+#endif
 
 	const bool generated_last = std::exchange(s_generated_last, false);
 	if (!s_swapchain_compatible || present_info.swapchainCount != 1 || !present_info.pSwapchains ||
@@ -300,7 +306,12 @@ bool SwitchLSFG_Present(VkQueue queue, const VkPresentInfoKHR& present_info, VkR
 	if (s_rate_decision < 0 && s_source_samples >= 8)
 		s_rate_decision = SourceIsHighRate() ? 1 : 0;
 	// A 50/60 FPS game shows at its own rate at 60 Hz, until it slows down to a rate frame generation doubles.
-	if (s_rate_decision == 1 && nx2DisplayRefreshRate() < 120)
+#ifdef __SWITCH2__
+	const int display_rate = nx2DisplayRefreshRate();
+#else
+	constexpr int display_rate = 60;
+#endif
+	if (s_rate_decision == 1 && display_rate < 120)
 	{
 		SwitchLSFG_SetStatus(true, true);
 		if (source_interval >= 31'500'000)

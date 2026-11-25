@@ -6,7 +6,9 @@
 #include "pcsx2/Host.h"
 
 #include "common/Horizon/Horizon.h"
+#ifdef __SWITCH2__
 #include "nx2_platform.h"
+#endif
 
 #include <atomic>
 #include <cstdio>
@@ -65,9 +67,19 @@ namespace
 void SwitchLSFG_Configure(bool deko3d)
 {
 	const bool requested = Host::GetBoolSettingValue("Switch", "FrameGeneration", false);
+#ifdef __SWITCH2__
 	s_flow_scale.store(FlowScale(Host::GetFloatSettingValue("Switch", "FrameGenerationFlowScale", 0.5f)), std::memory_order_release);
+#else
+	// (quarter resolution by default on the Switch's GPU)
+	s_flow_scale.store(FlowScale(Host::GetFloatSettingValue("Switch", "FrameGenerationFlowScale", 0.25f)), std::memory_order_release);
+#endif
 	s_performance.store(Host::GetBoolSettingValue("Switch", "FrameGenerationPerformance", true), std::memory_order_release);
+#ifdef __SWITCH2__
 	s_high_refresh.store(Host::GetBoolSettingValue("Switch", "FrameGeneration120Hz", false), std::memory_order_release);
+#else
+	// (the Switch has no 120 Hz: a value the Switch 2 saved on the same SD card does not apply)
+	s_high_refresh.store(false, std::memory_order_release);
+#endif
 	const bool installed = FileReadable(SWITCH_LSFG_DLL_PATH);
 	s_installed.store(installed, std::memory_order_release);
 	s_deko3d.store(deko3d, std::memory_order_release);
@@ -156,9 +168,11 @@ bool SwitchLSFG_DoublesSourceRate(float source_fps)
 {
 	if (source_fps >= 27.0f && source_fps <= 33.5f)
 		return true;
-	// A 50/60 FPS game at 120 Hz: handheld, or docked with the 120 Hz Docked Mode option.
+#ifdef __SWITCH2__
+	// A 50/60 FPS game at 120 Hz: handheld, or docked with the 120 Hz Docked Mode option (the Switch stays at 60 Hz).
 	if (source_fps >= 45.0f && source_fps <= 62.0f)
 		return nx2DisplayRefreshRate() >= 120 || s_high_refresh.load(std::memory_order_acquire);
+#endif
 	return false;
 }
 

@@ -6,7 +6,7 @@
 #else
 #include "ImGui/FullscreenUI.h"
 #endif
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 #include "switch/lsfg/SwitchLSFG.h"
 #endif
 #include "ImGui/ImGuiManager.h"
@@ -1158,7 +1158,7 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 	const bool fb_sprite_frame = (fb_sprite_blits > 0);
 
 	bool skip_frame = false;
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	// LSFG 2x interpolates between unique frames: a 30 FPS game's repeated presents would read as 60 FPS.
 	if (GSConfig.SkipDuplicateFrames || SwitchLSFG_IsEnabled())
 #else

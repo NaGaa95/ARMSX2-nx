@@ -17,8 +17,6 @@
 #include "pcsx2/Host.h"
 #ifdef ARMSX2_NX
 #include "pcsx2/ImGui/SwitchQuickMenu.h"
-#endif
-#ifdef __SWITCH2__
 #include "switch/lsfg/SwitchLSFG.h"
 #endif
 #include "pcsx2/ImGui/FullscreenUI.h"
@@ -188,11 +186,13 @@ void Host::ReleaseRenderWindow()
 
 void Host::BeginPresentFrame()
 {
-#ifdef __SWITCH2__
-	nx2GameShareUpdate();
+#ifdef ARMSX2_NX
 	const LimiterModeType limiter = VMManager::GetLimiterMode();
 	SwitchLSFG_SetGameState(VMManager::GetState() == VMState::Running && !SwitchQuickMenu::IsOpen(),
 		limiter == LimiterModeType::Turbo || limiter == LimiterModeType::Unlimited);
+#endif
+#ifdef __SWITCH2__
+	nx2GameShareUpdate();
 
 	// Docking or a TV mode change resized the default window, or changed its refresh rate: the renderer follows, and
 	// so does the speed limiter when it syncs to the host's refresh rate.
@@ -352,7 +352,7 @@ void Host::OnVMStarting()
 	// (while the game boots)
 	SetSwitchCpuBoostEnabled(true);
 #endif
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	SwitchLSFG_ResetSession();
 #endif
 	INFO_LOG("Host: VM starting");

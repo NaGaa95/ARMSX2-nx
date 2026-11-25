@@ -14,7 +14,7 @@
 #include <memory>
 #include <vector>
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 #include "common/Threading.h"
 #include "switch/lsfg/SwitchLSFG.h"
 #include "switch/lsfg/deko3d/LSFGFrameGenerator.h"
@@ -373,13 +373,6 @@ private:
 	int m_present_slot = -1;
 
 #ifdef __SWITCH2__
-	// LSFG 2x (switch/lsfg): with a generator, the frame is composed into m_lsfg_display, then the generated frame and
-	// the real one are blitted to the swapchain and presented (PPSSPP-nx's DekoContext does the same).
-	static constexpr u32 LSFG_SCRATCH_PER_WARP = 32 * 1024;
-	void UpdateFrameGeneration();
-	void UpdateFrameGenerationDisplay();
-	void SubmitGeneratedFrame();
-	bool PresentFrameGenerationImage(const DkImage& image, bool last);
 	// GameShare's guest screen: the frame's final image scaled into the guest's swapchain (recorded in the frame's
 	// commands; -1 without a guest screen), then presented once the frame is submitted
 	int RecordGuestCopy(const DkImage& source);
@@ -391,6 +384,15 @@ private:
 	DkImage m_guest_framebuffers[NUM_GUEST_FRAMEBUFFERS] = {};
 	u32 m_guest_width = 0;
 	u32 m_guest_height = 0;
+#endif
+#ifdef ARMSX2_NX
+	// LSFG 2x (switch/lsfg): with a generator, the frame is composed into m_lsfg_display, then the generated frame and
+	// the real one are blitted to the swapchain and presented (PPSSPP-nx's DekoContext does the same).
+	static constexpr u32 LSFG_SCRATCH_PER_WARP = 32 * 1024;
+	void UpdateFrameGeneration();
+	void UpdateFrameGenerationDisplay();
+	void SubmitGeneratedFrame();
+	bool PresentFrameGenerationImage(const DkImage& image, bool last);
 	void DestroyFrameGeneration();
 	void StopFrameGenerationPreparation();
 

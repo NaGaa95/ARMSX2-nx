@@ -80,6 +80,8 @@ namespace
 
 #ifdef __SWITCH2__
 #include "nx2_platform.h"
+#endif
+#ifdef ARMSX2_NX
 #include "switch/lsfg/SwitchLSFG.h"
 #include "switch/lsfg/SwitchLSFGVulkan.h"
 
@@ -655,7 +657,7 @@ bool GSDeviceVK::SelectDeviceExtensions(ExtensionList* extension_list)
 #endif
 
 	m_optional_extensions.vk_ext_fragment_shader_interlock = SupportsExtension(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, false);
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	s_lsfg_timeline_semaphores =
 		SwitchLSFG_WantsTimelineSemaphores() && SupportsExtension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME, false);
 #endif
@@ -1093,7 +1095,7 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 		Vulkan::AddPointerToChain(&device_info, &descriptor_indexing_feature);
 	}
 
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	VkPhysicalDeviceTimelineSemaphoreFeatures lsfg_timeline_feature{};
 	if (SwitchLSFG_PrepareDeviceFeatures(m_physical_device, s_lsfg_timeline_semaphores, lsfg_timeline_feature))
 		Vulkan::AddPointerToChain(&device_info, &lsfg_timeline_feature);
@@ -1116,7 +1118,7 @@ bool GSDeviceVK::CreateDevice(VkSurfaceKHR surface, bool enable_validation_layer
 	vkGetDeviceQueue(m_device, m_graphics_queue_family_index, 0, &m_graphics_queue);
 	if (m_window_system.type != WindowInfo::Type::Surfaceless)
 		vkGetDeviceQueue(m_device, m_present_queue_family_index, 0, &m_present_queue);
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	SwitchLSFG_SetDevice(m_instance, m_physical_device, m_device, m_present_queue, m_present_queue_family_index,
 		vkGetInstanceProcAddr);
 #endif
@@ -2321,7 +2323,7 @@ void GSDeviceVK::SubmitCommandBuffer(VKSwapChain* present_swap_chain)
 
 		const bool stats = VKSwapChain::IsPresentStatsEnabled();
 		const Common::Timer::Value t_present_start = stats ? Common::Timer::GetCurrentValue() : 0;
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 		// LSFG 2x presents the generated frame, then the real one.
 		if (!SwitchLSFG_Present(m_present_queue, present_info, res))
 #endif
@@ -3470,7 +3472,7 @@ void GSDeviceVK::Destroy()
 	// The negotiated device belongs to the libretro frontend (it made the
 	// vkCreateDevice call) and it destroys it after context_destroy —
 	// destroying it here would leave the frontend tearing down a dead device.
-#ifdef __SWITCH2__
+#ifdef ARMSX2_NX
 	SwitchLSFG_ResetDevice();
 #endif
 	if (m_device != VK_NULL_HANDLE)
@@ -4292,6 +4294,8 @@ bool GSDeviceVK::CreateDeviceAndSwapChain()
 	m_window_info.surface_width = 1280;
 	m_window_info.surface_height = 720;
 	m_window_info.surface_refresh_rate = 60.0f;
+	// Before vkCreateInstance, which reads NVK_DEBUG: LSFG adds no_cbuf to it.
+	SwitchLSFG_Configure(false);
 #endif
 	m_window_info.surface_scale = 1.0f;
 #endif

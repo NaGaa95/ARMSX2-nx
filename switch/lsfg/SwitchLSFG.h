@@ -10,8 +10,14 @@
 
 // The DLL and the caches, on the SD card (newlib's default device).
 inline constexpr const char* SWITCH_LSFG_DLL_PATH = "/switch/armsx2-nx/lsfg/Lossless.dll";
+#ifdef __SWITCH2__
 inline constexpr const char* SWITCH_LSFG_VK_PIPELINE_CACHE = "/switch/armsx2-nx/cache/lsfg-vk-pipeline-cache.bin";
 inline constexpr const char* SWITCH_LSFG_DEKO_CACHE_ROOT = "/switch/armsx2-nx/cache/drako3d/lsfg-1";
+#else
+// (one SD card serves both consoles, whose GPUs take other shaders and pipelines)
+inline constexpr const char* SWITCH_LSFG_VK_PIPELINE_CACHE = "/switch/armsx2-nx/cache/lsfg-vk-pipeline-cache-switch.bin";
+inline constexpr const char* SWITCH_LSFG_DEKO_CACHE_ROOT = "/switch/armsx2-nx/cache/deko3d/lsfg-1";
+#endif
 
 // Reads the launcher's settings and checks for the DLL. The Vulkan core calls it before it creates its Vulkan instance.
 void SwitchLSFG_Configure(bool deko3d);
